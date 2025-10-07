@@ -1,6 +1,6 @@
 package de.alexanderwolz.keycloak.docker.mapping
 
-import org.jboss.logging.Logger
+import de.alexanderwolz.commons.log.Logger
 import org.keycloak.models.AuthenticatedClientSessionModel
 import org.keycloak.models.ClientModel
 import org.keycloak.models.UserModel
@@ -31,7 +31,7 @@ abstract class AbstractDockerScopeMapper(
 
     }
 
-    internal val logger: Logger = Logger.getLogger(javaClass.simpleName)
+    internal val logger = Logger(javaClass)
 
     override fun getId(): String {
         return id
@@ -48,7 +48,7 @@ abstract class AbstractDockerScopeMapper(
     internal fun getScopesFromSession(clientSession: AuthenticatedClientSessionModel): Collection<String> {
         val scopeString = clientSession.getNote(DockerAuthV2Protocol.SCOPE_PARAM)
         if (logger.isDebugEnabled && (scopeString == null || scopeString.isEmpty())) {
-            logger.debug("Session does not contain a scope, ignoring further access check")
+            logger.debug{"Session does not contain a scope, ignoring further access check"}
         }
         return scopeString?.split(" ") ?: emptySet()
     }
@@ -56,12 +56,10 @@ abstract class AbstractDockerScopeMapper(
     internal fun parseScopeIntoAccessItem(scope: String): DockerScopeAccess? {
         return try {
             val accessItem = DockerScopeAccess(scope)
-            if (logger.isTraceEnabled) {
-                logger.trace("Parsed scope '$scope' into: $accessItem")
-            }
+            logger.trace{"Parsed scope '$scope' into: $accessItem"}
             accessItem
         } catch (e: Exception) {
-            logger.warn("Could not parse scope '$scope' into access object", e)
+            logger.warn{"Could not parse scope '$scope' into access object: ${e.message}"}
             null
         }
     }
@@ -142,9 +140,8 @@ abstract class AbstractDockerScopeMapper(
         user: UserModel,
         reason: String
     ): DockerResponseToken {
-        if (logger.isDebugEnabled) {
-            logger.debug("Granting access for user '${user.username}' on scope '${accessItem.scope}': $reason")
-        }
+        logger.debug{"Granting access for user '${user.username}' on scope '${accessItem.scope}': $reason"}
+
         responseToken.accessItems.add(accessItem)
         return responseToken
     }
@@ -156,9 +153,7 @@ abstract class AbstractDockerScopeMapper(
         user: UserModel,
         reason: String
     ): DockerResponseToken {
-        if (logger.isDebugEnabled) {
-            logger.debug("Granting access for user '${user.username}' on scope '${accessItem.scope}': $reason")
-        }
+        logger.debug{"Granting access for user '${user.username}' on scope '${accessItem.scope}': $reason"}
         accessItem.actions = allowedActions
         responseToken.accessItems.add(accessItem)
         return responseToken
@@ -170,7 +165,7 @@ abstract class AbstractDockerScopeMapper(
         user: UserModel,
         reason: String
     ): DockerResponseToken {
-        logger.warn("Access denied for user '${user.username}' on scope '${accessItem.scope}': $reason")
+        logger.warn{"Access denied for user '${user.username}' on scope '${accessItem.scope}': $reason"}
         return responseToken
     }
 
@@ -178,7 +173,7 @@ abstract class AbstractDockerScopeMapper(
         return try {
             System.getenv()[key]
         } catch (e: Exception) {
-            logger.error("Could not access System Environment", e)
+            logger.error(e) { "Could not access System Environment" }
             null
         }
     }
