@@ -98,7 +98,7 @@ publishing {
             pom {
                 name.set("Keycloak Role and Groups Mapper for Docker Registry V2")
                 description.set("Authorization Mapping Provider for Keycloak's Docker Registry v2 token protocol based on client roles and realm groups with configuration options.")
-                url.set("https://github.com/alexanderwolz/keycloak-docker-group-role-mapper")
+                url.set("https://github.com/alexanderwolz/keycloak-registry-mapper")
                 licenses {
                     license {
                         name.set("Apache License 2.0")
@@ -113,9 +113,9 @@ publishing {
                     }
                 }
                 scm {
-                    connection.set("scm:git:https://github.com/alexanderwolz/keycloak-docker-group-role-mapper.git")
-                    developerConnection.set("scm:git:ssh://git@github.com/alexanderwolz/keycloak-docker-group-role-mapper.git")
-                    url.set("https://github.com/alexanderwolz/keycloak-docker-group-role-mapper")
+                    connection.set("scm:git:https://github.com/alexanderwolz/keycloak-registry-mapper.git")
+                    developerConnection.set("scm:git:ssh://git@github.com/alexanderwolz/keycloak-registry-mapper.git")
+                    url.set("https://github.com/alexanderwolz/keycloak-registry-mapper")
                 }
             }
         }

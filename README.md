@@ -1,12 +1,12 @@
 # Docker v2 - Groups and Role Mapper for Keycloak 26.x
 
-![GitHub release (latest by date)](https://img.shields.io/github/v/release/alexanderwolz/keycloak-docker-group-role-mapper)
-![GitHub](https://img.shields.io/badge/keycloak-26.1.0-orange)
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/alexanderwolz/keycloak-registry-mapper)
+![GitHub](https://img.shields.io/badge/keycloak-26.4.0-orange)
 ![GitHub](https://img.shields.io/badge/registry-2.8.2-orange)
-![GitHub](https://img.shields.io/github/license/alexanderwolz/keycloak-docker-group-role-mapper)
+![GitHub](https://img.shields.io/github/license/alexanderwolz/keycloak-registry-mapper)
 ![GitHub](https://img.shields.io/badge/test_cases-632-informational)
-![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/alexanderwolz/keycloak-docker-group-role-mapper)
-![GitHub all releases](https://img.shields.io/github/downloads/alexanderwolz/keycloak-docker-group-role-mapper/total?color=informational)
+![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/alexanderwolz/keycloak-registry-mapper)
+![GitHub all releases](https://img.shields.io/github/downloads/alexanderwolz/keycloak-registry-mapper/total?color=informational)
 
 ## 🧑‍💻 About
 
@@ -17,7 +17,7 @@ This repository provides a MappingProvider for Keycloak's Docker-v2 protocol. It
 2. Copy  ```/build/libs/*.jar``` into Keycloak´s ```/opt/keycloak/providers/``` folder
 3. Build keycloak instance using ```/opt/keycloak/bin/kc.sh build```
 
-See also Keycloak [Dockerfile](https://github.com/alexanderwolz/keycloak-docker-group-role-mapper/blob/main/examples/keycloak-with-mapper/Dockerfile) for reference in [examples](https://github.com/alexanderwolz/keycloak-docker-group-role-mapper/tree/main/examples) section.
+See also Keycloak [Dockerfile](https://github.com/alexanderwolz/keycloak-registry-mapper/blob/main/examples/keycloak-with-mapper/Dockerfile) for reference in [examples](https://github.com/alexanderwolz/keycloak-registry-mapper/tree/main/examples) section.
 
 ## 🔬 Basic Concept
 - Users can be grouped to the same repository namespace by assigning them to one or several groups starting with ```registry-```.
