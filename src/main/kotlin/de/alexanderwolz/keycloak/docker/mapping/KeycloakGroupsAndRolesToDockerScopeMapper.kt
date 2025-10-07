@@ -263,8 +263,8 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
                 it == NAMESPACE_SCOPE_GROUP || it == NAMESPACE_SCOPE_USERNAME || it == NAMESPACE_SCOPE_DOMAIN || it == NAMESPACE_SCOPE_SLD
             }
             if (scopes.isEmpty()) {
-                logger.warn("Empty or unsupported config values for \$$KEY_REGISTRY_NAMESPACE_SCOPE: $scopeString")
-                logger.warn("Resetting \$$KEY_REGISTRY_NAMESPACE_SCOPE to default: $NAMESPACE_SCOPE_DEFAULT")
+                logger.warn{"Empty or unsupported config values for \$$KEY_REGISTRY_NAMESPACE_SCOPE: $scopeString"}
+                logger.warn{"Resetting \$$KEY_REGISTRY_NAMESPACE_SCOPE to default: $NAMESPACE_SCOPE_DEFAULT"}
                 NAMESPACE_SCOPE_DEFAULT
             }
             scopes.toSet()
