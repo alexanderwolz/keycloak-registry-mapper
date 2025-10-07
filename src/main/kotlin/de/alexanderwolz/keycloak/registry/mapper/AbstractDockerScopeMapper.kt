@@ -1,4 +1,4 @@
-package de.alexanderwolz.keycloak.docker.mapping
+package de.alexanderwolz.keycloak.registry.mapper
 
 import de.alexanderwolz.commons.log.Logger
 import org.keycloak.models.AuthenticatedClientSessionModel

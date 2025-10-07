@@ -1,10 +1,10 @@
-package de.alexanderwolz.keycloak.docker.mapping
+package de.alexanderwolz.keycloak.registry.mapper
 
-import de.alexanderwolz.keycloak.docker.mapping.AbstractDockerScopeMapper.Companion.ACTION_ALL
-import de.alexanderwolz.keycloak.docker.mapping.AbstractDockerScopeMapper.Companion.ACTION_ALL_SUBSTITUTE
-import de.alexanderwolz.keycloak.docker.mapping.AbstractDockerScopeMapper.Companion.ACTION_DELETE
-import de.alexanderwolz.keycloak.docker.mapping.AbstractDockerScopeMapper.Companion.ACTION_PULL
-import de.alexanderwolz.keycloak.docker.mapping.AbstractDockerScopeMapper.Companion.ACTION_PUSH
+import de.alexanderwolz.keycloak.registry.mapper.AbstractDockerScopeMapper.Companion.ACTION_ALL
+import de.alexanderwolz.keycloak.registry.mapper.AbstractDockerScopeMapper.Companion.ACTION_ALL_SUBSTITUTE
+import de.alexanderwolz.keycloak.registry.mapper.AbstractDockerScopeMapper.Companion.ACTION_DELETE
+import de.alexanderwolz.keycloak.registry.mapper.AbstractDockerScopeMapper.Companion.ACTION_PULL
+import de.alexanderwolz.keycloak.registry.mapper.AbstractDockerScopeMapper.Companion.ACTION_PUSH
 import org.junit.jupiter.api.Test
 import org.keycloak.models.AuthenticatedClientSessionModel
 import org.keycloak.models.ClientModel

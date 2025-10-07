@@ -1,4 +1,4 @@
-package de.alexanderwolz.keycloak.docker.mapping
+package de.alexanderwolz.keycloak.registry.mapper
 
 import org.keycloak.models.*
 import org.keycloak.protocol.docker.mapper.DockerAuthV2AttributeMapper
