@@ -1,6 +1,6 @@
-package de.alexanderwolz.keycloak.docker.mapping.testsuite
+package de.alexanderwolz.keycloak.registry.mapper.testsuite
 
-import de.alexanderwolz.keycloak.docker.mapping.KeycloakGroupsAndRolesToDockerScopeMapper
+import de.alexanderwolz.keycloak.registry.mapper.KeycloakGroupsAndRolesToDockerScopeMapper
 import org.jboss.logging.Logger
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
