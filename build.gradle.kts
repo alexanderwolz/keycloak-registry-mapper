@@ -12,7 +12,7 @@ plugins {
 val keycloakVersion = "26.4.2"
 
 group = "de.alexanderwolz"
-version = "1.8.1"
+version = "1.9.1"
 
 repositories {
     mavenCentral()
