@@ -3,11 +3,14 @@ package de.alexanderwolz.keycloak.registry.mapper
 import de.alexanderwolz.commons.log.Logger
 import org.keycloak.models.AuthenticatedClientSessionModel
 import org.keycloak.models.ClientModel
+import org.keycloak.models.RoleModel
 import org.keycloak.models.UserModel
+import org.keycloak.models.utils.RoleUtils
 import org.keycloak.protocol.docker.DockerAuthV2Protocol
 import org.keycloak.protocol.docker.mapper.DockerAuthV2ProtocolMapper
 import org.keycloak.representations.docker.DockerAccess
 import org.keycloak.representations.docker.DockerResponseToken
+import java.util.stream.Collectors
 
 abstract class AbstractDockerScopeMapper(
     private val id: String,
@@ -48,7 +51,7 @@ abstract class AbstractDockerScopeMapper(
     internal fun getScopesFromSession(clientSession: AuthenticatedClientSessionModel): Collection<String> {
         val scopeString = clientSession.getNote(DockerAuthV2Protocol.SCOPE_PARAM)
         if (logger.isDebugEnabled && (scopeString == null || scopeString.isEmpty())) {
-            logger.debug{"Session does not contain a scope, ignoring further access check"}
+            logger.debug { "Session does not contain a scope, ignoring further access check" }
         }
         return scopeString?.split(" ") ?: emptySet()
     }
@@ -56,16 +59,20 @@ abstract class AbstractDockerScopeMapper(
     internal fun parseScopeIntoAccessItem(scope: String): DockerScopeAccess? {
         return try {
             val accessItem = DockerScopeAccess(scope)
-            logger.trace{"Parsed scope '$scope' into: $accessItem"}
+            logger.trace { "Parsed scope '$scope' into: $accessItem" }
             accessItem
         } catch (e: Exception) {
-            logger.warn{"Could not parse scope '$scope' into access object: ${e.message}"}
+            logger.warn { "Could not parse scope '$scope' into access object: ${e.message}" }
             null
         }
     }
 
     internal fun getClientRoleNames(user: UserModel, client: ClientModel): Collection<String> {
-        return user.getClientRoleMappingsStream(client).map { it.name }.toList()
+        return RoleUtils.getDeepUserRoleMappings(user)
+            .filter { it.container is ClientModel && it.container.id == client.id }
+            .map(RoleModel::getName)
+            .distinct()
+            .also { logger.debug { "User has client roles: ${it.joinToString()}" } }
     }
 
     internal fun getDomainFromEmail(email: String): String? {
@@ -140,7 +147,7 @@ abstract class AbstractDockerScopeMapper(
         user: UserModel,
         reason: String
     ): DockerResponseToken {
-        logger.debug{"Granting access for user '${user.username}' on scope '${accessItem.scope}': $reason"}
+        logger.debug { "Granting access for user '${user.username}' on scope '${accessItem.scope}': $reason" }
 
         responseToken.accessItems.add(accessItem)
         return responseToken
@@ -153,7 +160,7 @@ abstract class AbstractDockerScopeMapper(
         user: UserModel,
         reason: String
     ): DockerResponseToken {
-        logger.debug{"Granting access for user '${user.username}' on scope '${accessItem.scope}': $reason"}
+        logger.debug { "Granting access for user '${user.username}' on scope '${accessItem.scope}': $reason" }
         accessItem.actions = allowedActions
         responseToken.accessItems.add(accessItem)
         return responseToken
@@ -165,7 +172,7 @@ abstract class AbstractDockerScopeMapper(
         user: UserModel,
         reason: String
     ): DockerResponseToken {
-        logger.warn{"Access denied for user '${user.username}' on scope '${accessItem.scope}': $reason"}
+        logger.warn { "Access denied for user '${user.username}' on scope '${accessItem.scope}': $reason" }
         return responseToken
     }
 

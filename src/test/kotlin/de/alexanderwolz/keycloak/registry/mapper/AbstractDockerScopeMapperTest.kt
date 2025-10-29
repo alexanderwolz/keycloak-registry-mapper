@@ -8,6 +8,7 @@ import de.alexanderwolz.keycloak.registry.mapper.AbstractDockerScopeMapper.Compa
 import org.junit.jupiter.api.Test
 import org.keycloak.models.AuthenticatedClientSessionModel
 import org.keycloak.models.ClientModel
+import org.keycloak.models.RoleContainerModel
 import org.keycloak.models.RoleModel
 import org.keycloak.models.UserModel
 import org.keycloak.protocol.docker.DockerAuthV2Protocol
@@ -92,17 +93,22 @@ internal class AbstractDockerScopeMapperTest {
     @Test
     fun testGetClientRoleNames() {
         val client = Mockito.mock(ClientModel::class.java)
-        given(client.clientId).willReturn("client")
-        val user = Mockito.mock(UserModel::class.java)
+        given(client.id).willReturn("client-id")
 
-        val expectedRoleNames = setOf(KeycloakGroupsAndRolesToDockerScopeMapper.ROLE_EDITOR, "otherRoleWithCamelCase")
-        given(user.getClientRoleMappingsStream(client)).willAnswer {
-            expectedRoleNames.map { roleName ->
-                Mockito.mock(RoleModel::class.java).also {
-                    given(it.name).willReturn(roleName)
-                }
-            }.stream()
+        val user = Mockito.mock(UserModel::class.java)
+        val expectedRoleNames = listOf("editor", "otherRoleWithCamelCase")
+
+        val roles = expectedRoleNames.map { roleName ->
+            val role = Mockito.mock(RoleModel::class.java)
+            val container = Mockito.mock(ClientModel::class.java)
+            given(container.id).willReturn("client-id")
+            given(role.name).willReturn(roleName)
+            given(role.container).willReturn(container)
+            role
         }
+
+        given(user.roleMappingsStream).willReturn(roles.stream())
+
         val roleNames = mapper.getClientRoleNames(user, client)
         assertEquals(expectedRoleNames.sorted(), roleNames.sorted())
     }

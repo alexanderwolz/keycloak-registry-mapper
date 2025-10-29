@@ -9,7 +9,7 @@ plugins {
     signing
 }
 
-val keycloakVersion = "26.4.0"
+val keycloakVersion = "26.4.2"
 
 group = "de.alexanderwolz"
 version = "1.8.1"
