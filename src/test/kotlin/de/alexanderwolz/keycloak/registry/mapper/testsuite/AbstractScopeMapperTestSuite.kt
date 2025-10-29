@@ -110,7 +110,7 @@ abstract class AbstractScopeMapperTestSuite {
         given(userModel.email).willReturn(USER_EMAIL)
 
         clientModel = Mockito.mock(ClientModel::class.java)
-        given(clientModel.clientId).willReturn(CLIENT_ID)
+        given(clientModel.id).willReturn(CLIENT_ID)
 
         userSession = Mockito.mock(UserSessionModel::class.java)
         given(userSession.user).willReturn(userModel)
@@ -118,7 +118,7 @@ abstract class AbstractScopeMapperTestSuite {
 
         clientSession = Mockito.mock(AuthenticatedClientSessionModel::class.java)
         given(clientSession.client).willReturn(clientModel)
-        assertEquals(CLIENT_ID, clientSession.client.clientId)
+        assertEquals(CLIENT_ID, clientSession.client.id)
 
         setGroups()
         setRoles()
@@ -133,7 +133,7 @@ abstract class AbstractScopeMapperTestSuite {
 
     protected open fun setRoles(vararg roleNames: String) {
         val roles = createClientRolesByNames(*roleNames)
-        given(userModel.getClientRoleMappingsStream(clientModel)).willAnswer { roles.stream() }
+        given(userModel.roleMappingsStream).willAnswer { roles.stream() }
     }
 
     protected fun setScope(scope: String = "") {
@@ -184,13 +184,14 @@ abstract class AbstractScopeMapperTestSuite {
     }
 
     private fun createClientRolesByNames(vararg names: String): Collection<RoleModel> {
-        val roles = ArrayList<RoleModel>()
-        names.forEach {
+        return names.map { roleName ->
             val role = Mockito.mock(RoleModel::class.java)
-            BDDMockito.given(role.name).willReturn(it)
-            roles.add(role)
+            val container = Mockito.mock(ClientModel::class.java)
+            given(container.id).willReturn(CLIENT_ID)
+            given(role.name).willReturn(roleName)
+            given(role.container).willReturn(container)
+            role
         }
-        return roles
     }
 
 }
