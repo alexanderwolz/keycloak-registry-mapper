@@ -19,6 +19,9 @@ This repository provides a MappingProvider for Keycloak's Docker-v2 protocol. It
 
 See also Keycloak [Dockerfile](https://github.com/alexanderwolz/keycloak-registry-mapper/blob/main/examples/keycloak-with-mapper/Dockerfile) for reference in [examples](https://github.com/alexanderwolz/keycloak-registry-mapper/tree/main/examples) section.
 
+## 🐳 Docker Image
+Alternatively use a pre-built Keycloak Docker [image](https://hub.docker.com/repository/docker/alexanderwolz/keycloak/), which bundles this mapper plugin.
+
 ## 🔬 Basic Concept
 - Users can be grouped to the same repository namespace by assigning them to one or several groups starting with ```registry-```.
 - Without any client roles assigned, users will be granted read-only access to their namespaces.
