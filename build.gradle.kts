@@ -9,10 +9,10 @@ plugins {
     signing
 }
 
-val keycloakVersion = "26.4.2"
+val keycloakVersion = "26.5.0"
 
 group = "de.alexanderwolz"
-version = "1.9.1"
+version = "1.9.2"
 
 repositories {
     mavenCentral()
@@ -38,7 +38,7 @@ dependencies {
     compileOnly("org.keycloak:keycloak-server-spi:$keycloakVersion")
     compileOnly("org.keycloak:keycloak-server-spi-private:$keycloakVersion")
 
-    implementation("de.alexanderwolz:commons-util:1.4.7")
+    implementation("de.alexanderwolz:commons-util:1.7.1")
     runtimeOnly("org.jboss.slf4j:slf4j-jboss-logmanager:2.0.1.Final")
 
     testImplementation("org.jetbrains.kotlin:kotlin-test")
