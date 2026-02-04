@@ -75,6 +75,13 @@ abstract class AbstractDockerScopeMapper(
             .also { logger.debug { "User has client roles: ${it.joinToString()}" } }
     }
 
+    internal fun getClientRoles(user: UserModel, client: ClientModel): Collection<RoleModel> {
+        return RoleUtils.getDeepUserRoleMappings(user)
+            .filter { it.container is ClientModel && it.container.id == client.id }
+            .distinct()
+            .also { roles -> logger.debug { "User has client roles: ${roles.map { it.name }.joinToString()}" } }
+    }
+
     internal fun getDomainFromEmail(email: String): String? {
         val parts = email.split("@")
         if (parts.size == 2) {

@@ -38,6 +38,13 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
         internal const val NAMESPACE_SCOPE_DOMAIN = "domain"
         internal const val NAMESPACE_SCOPE_SLD = "sld"
         internal val NAMESPACE_SCOPE_DEFAULT = setOf(NAMESPACE_SCOPE_GROUP)
+
+        // Role attribute prefix for namespace permissions (e.g., "registry:myrepo" = "pull,push")
+        internal const val ROLE_ATTRIBUTE_PREFIX = "registry:"
+
+        // Role attribute key and value for catalog access (key: "registry", value: "catalog")
+        internal const val ROLE_ATTRIBUTE_KEY_REGISTRY = "registry"
+        internal const val ROLE_ATTRIBUTE_VALUE_CATALOG = "catalog"
     }
 
     internal var groupPrefix = getGroupPrefixFromEnv()
@@ -68,15 +75,17 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
             return responseToken // no actions given in scope
         }
 
-        val clientRoleNames = getClientRoleNames(userSession.user, clientSession.client)
+        val clientRoles = getClientRoles(userSession.user, clientSession.client)
+        val clientRoleNames = clientRoles.map { it.name }
 
-        return handleScopeAccess(responseToken, accessItems.first(), clientRoleNames, userSession.user)
+        return handleScopeAccess(responseToken, accessItems.first(), clientRoleNames, clientRoles, userSession.user)
     }
 
     private fun handleScopeAccess(
         responseToken: DockerResponseToken,
         accessItem: DockerScopeAccess,
         clientRoleNames: Collection<String>,
+        clientRoles: Collection<RoleModel>,
         user: UserModel,
     ): DockerResponseToken {
 
@@ -88,16 +97,16 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
 
         //users and editors
         if (accessItem.type == ACCESS_TYPE_REGISTRY) {
-            return handleRegistryAccess(responseToken, clientRoleNames, accessItem, user)
+            return handleRegistryAccess(responseToken, clientRoleNames, clientRoles, accessItem, user)
         }
 
         if (accessItem.type == ACCESS_TYPE_REPOSITORY) {
-            return handleRepositoryAccess(responseToken, clientRoleNames, accessItem, user)
+            return handleRepositoryAccess(responseToken, clientRoleNames, clientRoles, accessItem, user)
         }
 
         if (accessItem.type == ACCESS_TYPE_REPOSITORY_PLUGIN) {
             //handle plugins the same as normal repositories
-            return handleRepositoryAccess(responseToken, clientRoleNames, accessItem, user)
+            return handleRepositoryAccess(responseToken, clientRoleNames, clientRoles, accessItem, user)
         }
 
         return deny(responseToken, accessItem, user, "Unsupported access type '${accessItem.type}'")
@@ -106,24 +115,45 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
     private fun handleRegistryAccess(
         responseToken: DockerResponseToken,
         clientRoleNames: Collection<String>,
+        clientRoles: Collection<RoleModel>,
         accessItem: DockerScopeAccess,
         user: UserModel
     ): DockerResponseToken {
         if (accessItem.name == NAME_CATALOG) {
+            // Check role attributes first
+            if (hasCatalogAccessFromRoleAttributes(clientRoles)) {
+                return allowAll(responseToken, accessItem, user, "Catalog access via role attribute")
+            }
+            // Then check global catalogAudience
             if (isAllowedToAccessRegistryCatalogScope(clientRoleNames)) {
                 val reason = "Allowed by catalog audience '$catalogAudience'"
                 return allowAll(responseToken, accessItem, user, reason)
             }
             val reason = if (clientRoleNames.contains(ROLE_EDITOR)) {
-                "Role '$ROLE_ADMIN' or \$${KEY_REGISTRY_CATALOG_AUDIENCE}='$AUDIENCE_EDITOR' needed to access catalog"
+                "Role '$ROLE_ADMIN' or \$${KEY_REGISTRY_CATALOG_AUDIENCE}='$AUDIENCE_EDITOR' or role attribute '$ROLE_ATTRIBUTE_KEY_REGISTRY'='$ROLE_ATTRIBUTE_VALUE_CATALOG' needed to access catalog"
             } else {
-                "Role '$ROLE_ADMIN' or \$${KEY_REGISTRY_CATALOG_AUDIENCE}='$AUDIENCE_USER' needed to access catalog"
+                "Role '$ROLE_ADMIN' or \$${KEY_REGISTRY_CATALOG_AUDIENCE}='$AUDIENCE_USER' or role attribute '$ROLE_ATTRIBUTE_KEY_REGISTRY'='$ROLE_ATTRIBUTE_VALUE_CATALOG' needed to access catalog"
             }
             return deny(responseToken, accessItem, user, reason)
         }
         //only admins can access scope 'registry'
         val reason = "Role '$ROLE_ADMIN' needed to access registry scope"
         return deny(responseToken, accessItem, user, reason)
+    }
+
+    /**
+     * Checks if any of the user's roles have the catalog access attribute.
+     * The attribute key is "registry" and the value must be "catalog".
+     */
+    internal fun hasCatalogAccessFromRoleAttributes(clientRoles: Collection<RoleModel>): Boolean {
+        for (role in clientRoles) {
+            val attributeValues = role.getAttributeStream(ROLE_ATTRIBUTE_KEY_REGISTRY).toList()
+            if (attributeValues.any { it.lowercase() == ROLE_ATTRIBUTE_VALUE_CATALOG }) {
+                logger.debug { "Role '${role.name}' grants catalog access via attribute" }
+                return true
+            }
+        }
+        return false
     }
 
     private fun isAllowedToAccessRegistryCatalogScope(clientRoleNames: Collection<String>): Boolean {
@@ -135,6 +165,7 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
     private fun handleRepositoryAccess(
         responseToken: DockerResponseToken,
         clientRoleNames: Collection<String>,
+        clientRoles: Collection<RoleModel>,
         accessItem: DockerScopeAccess,
         user: UserModel
     ): DockerResponseToken {
@@ -143,6 +174,9 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
             responseToken, accessItem, user, "Role '$ROLE_ADMIN' needed to access default namespace repositories"
         )
 
+        // Check for namespace-specific actions from role attributes
+        val roleAttributeActions = getNamespaceActionsFromRoleAttributes(clientRoles, namespace)
+
         if (namespaceScope.contains(NAMESPACE_SCOPE_USERNAME) && isUsernameRepository(namespace, user.username)) {
             //user's own repository, will have all access
             val allowedActions = substituteRequestedActions(accessItem.actions)
@@ -150,29 +184,159 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
         }
 
         if (namespaceScope.contains(NAMESPACE_SCOPE_DOMAIN) && isDomainRepository(namespace, user.email)) {
-            return handleNamespaceRepositoryAccess(responseToken, accessItem, clientRoleNames, user)
+            return handleNamespaceRepositoryAccessWithAttributes(
+                responseToken, accessItem, clientRoleNames, roleAttributeActions, user, "domain match"
+            )
         }
 
         if (namespaceScope.contains(NAMESPACE_SCOPE_SLD) && isSecondLevelDomainRepository(namespace, user.email)) {
-            return handleNamespaceRepositoryAccess(responseToken, accessItem, clientRoleNames, user)
+            return handleNamespaceRepositoryAccessWithAttributes(
+                responseToken, accessItem, clientRoleNames, roleAttributeActions, user, "SLD match"
+            )
         }
 
         if (namespaceScope.contains(NAMESPACE_SCOPE_GROUP)) {
-            val namespacesFromGroups = getUserNamespacesFromGroups(user).also {
-                if (it.isEmpty()) {
-                    val reason = "User does not belong to any namespace - check groups"
-                    return deny(responseToken, accessItem, user, reason)
-                }
-            }
+            val namespacesFromGroups = getUserNamespacesFromGroups(user)
             if (namespacesFromGroups.contains(namespace)) {
-                return handleNamespaceRepositoryAccess(responseToken, accessItem, clientRoleNames, user)
+                return handleNamespaceRepositoryAccessWithAttributes(
+                    responseToken, accessItem, clientRoleNames, roleAttributeActions, user, "group membership"
+                )
             }
-            val reason = "Missing namespace group '$groupPrefix$namespace' - check groups"
+            // If not in group but has role attribute actions, grant access via role attribute
+            if (roleAttributeActions != null) {
+                return handleNamespaceRepositoryAccessByAttributeOnly(
+                    responseToken, accessItem, roleAttributeActions, user, namespace
+                )
+            }
+            if (namespacesFromGroups.isEmpty()) {
+                val reason = "User does not belong to any namespace - check groups or role attributes"
+                return deny(responseToken, accessItem, user, reason)
+            }
+            val reason = "Missing namespace group '$groupPrefix$namespace' or role attribute '$ROLE_ATTRIBUTE_PREFIX$namespace'"
             return deny(responseToken, accessItem, user, reason)
         }
 
-        val reason = "User does not belong to namespace '$namespace' either by group nor username nor domain"
+        // If no namespace scope is configured but user has role attribute actions
+        if (roleAttributeActions != null) {
+            return handleNamespaceRepositoryAccessByAttributeOnly(
+                responseToken, accessItem, roleAttributeActions, user, namespace
+            )
+        }
+
+        val reason = "User does not belong to namespace '$namespace' - check groups, username, domain, or role attributes"
         return deny(responseToken, accessItem, user, reason)
+    }
+
+    /**
+     * Handles namespace repository access combining global roles with role attribute actions.
+     */
+    private fun handleNamespaceRepositoryAccessWithAttributes(
+        responseToken: DockerResponseToken,
+        accessItem: DockerScopeAccess,
+        clientRoleNames: Collection<String>,
+        roleAttributeActions: Set<String>?,
+        user: UserModel,
+        accessReason: String
+    ): DockerResponseToken {
+        val requestedActions = substituteRequestedActions(accessItem.actions)
+
+        // Get allowed actions from global roles
+        val roleBasedActions = filterAllowedActions(requestedActions, clientRoleNames)
+
+        // Combine with role attribute actions (if any)
+        val allowedActions = if (roleAttributeActions != null) {
+            val attributeBasedActions = filterActionsByRoleAttribute(requestedActions, roleAttributeActions)
+            (roleBasedActions + attributeBasedActions).distinct()
+        } else {
+            roleBasedActions
+        }
+
+        if (allowedActions.isEmpty()) {
+            val reason = "Missing privileges for actions [${accessItem.actions.joinToString()}] via $accessReason - check client roles or role attributes"
+            return deny(responseToken, accessItem, user, reason)
+        }
+
+        if (hasAllPrivileges(allowedActions, requestedActions)) {
+            val reason = "User has privilege on all actions via $accessReason"
+            return allowWithActions(responseToken, accessItem, allowedActions, user, reason)
+        }
+
+        val reason = "User has privilege only on [${allowedActions.joinToString()}] via $accessReason"
+        return allowWithActions(responseToken, accessItem, allowedActions, user, reason)
+    }
+
+    /**
+     * Handles namespace repository access when access is granted solely by role attributes (no group membership).
+     */
+    private fun handleNamespaceRepositoryAccessByAttributeOnly(
+        responseToken: DockerResponseToken,
+        accessItem: DockerScopeAccess,
+        roleAttributeActions: Set<String>,
+        user: UserModel,
+        namespace: String
+    ): DockerResponseToken {
+        val requestedActions = substituteRequestedActions(accessItem.actions)
+        val allowedActions = filterActionsByRoleAttribute(requestedActions, roleAttributeActions)
+
+        if (allowedActions.isEmpty()) {
+            val reason = "Missing privileges for actions [${accessItem.actions.joinToString()}] via role attribute '$ROLE_ATTRIBUTE_PREFIX$namespace'"
+            return deny(responseToken, accessItem, user, reason)
+        }
+
+        val accessReason = "role attribute '$ROLE_ATTRIBUTE_PREFIX$namespace'"
+        if (hasAllPrivileges(allowedActions, requestedActions)) {
+            val reason = "User has privilege on all actions via $accessReason"
+            return allowWithActions(responseToken, accessItem, allowedActions, user, reason)
+        }
+
+        val reason = "User has privilege only on [${allowedActions.joinToString()}] via $accessReason"
+        return allowWithActions(responseToken, accessItem, allowedActions, user, reason)
+    }
+
+    /**
+     * Gets the allowed actions for a namespace from role attributes.
+     * Looks for attributes like "registry:namespace" = "pull,push" or "registry:namespace" = "*"
+     * Supported actions: pull, push, delete, * (expands to all actions)
+     * Returns the set of allowed actions, or null if no attribute found.
+     */
+    internal fun getNamespaceActionsFromRoleAttributes(clientRoles: Collection<RoleModel>, namespace: String): Set<String>? {
+        val attributeKey = "$ROLE_ATTRIBUTE_PREFIX$namespace"
+        val allowedActions = mutableSetOf<String>()
+
+        for (role in clientRoles) {
+            val attributeValues = role.getAttributeStream(attributeKey).toList()
+            for (value in attributeValues) {
+                val actions = value.lowercase().split(",").map { it.trim() }
+                for (action in actions) {
+                    when (action) {
+                        ACTION_ALL, "*" -> {
+                            // Expand * to all actions
+                            allowedActions.addAll(ACTION_ALL_SUBSTITUTE)
+                        }
+                        ACTION_PULL, ACTION_PUSH, ACTION_DELETE -> {
+                            allowedActions.add(action)
+                        }
+                    }
+                }
+            }
+        }
+
+        return if (allowedActions.isNotEmpty()) {
+            logger.debug { "Found role attribute actions for namespace '$namespace': ${allowedActions.joinToString()}" }
+            allowedActions
+        } else {
+            null
+        }
+    }
+
+    /**
+     * Filters requested actions based on role attribute allowed actions.
+     */
+    internal fun filterActionsByRoleAttribute(
+        requestedActions: Collection<String>,
+        allowedActions: Set<String>
+    ): List<String> {
+        return requestedActions.filter { allowedActions.contains(it) }
     }
 
     internal fun getUserNamespacesFromGroups(user: UserModel): Collection<String> {
@@ -181,30 +345,6 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
         val filteredGroups = allGroups.filter { it.name.lowercase().startsWith(groupPrefix) }
         val namespaces = filteredGroups.map { it.name.lowercase().replace(groupPrefix, "") }
         return namespaces.toList()
-    }
-
-    private fun handleNamespaceRepositoryAccess(
-        responseToken: DockerResponseToken,
-        accessItem: DockerScopeAccess,
-        clientRoleNames: Collection<String>,
-        user: UserModel
-    ): DockerResponseToken {
-
-        val requestedActions = substituteRequestedActions(accessItem.actions)
-        val allowedActions = filterAllowedActions(requestedActions, clientRoleNames)
-
-        if (allowedActions.isEmpty()) {
-            val reason = "Missing privileges for actions [${accessItem.actions.joinToString()}] - check client roles"
-            return deny(responseToken, accessItem, user, reason)
-        }
-
-        if (hasAllPrivileges(allowedActions, requestedActions)) {
-            val reason = "User has privilege on all actions"
-            return allowWithActions(responseToken, accessItem, allowedActions, user, reason)
-        }
-
-        val reason = "User has privilege only on [${allowedActions.joinToString()}]"
-        return allowWithActions(responseToken, accessItem, allowedActions, user, reason)
     }
 
     internal fun filterAllowedActions(

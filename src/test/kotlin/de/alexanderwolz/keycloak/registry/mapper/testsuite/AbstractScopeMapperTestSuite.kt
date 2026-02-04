@@ -136,6 +136,18 @@ abstract class AbstractScopeMapperTestSuite {
         given(userModel.roleMappingsStream).willAnswer { roles.stream() }
     }
 
+    /**
+     * Sets roles with optional attributes.
+     * Each entry is a Pair of (roleName, Map of attributeKey to attributeValue)
+     * Example: setRolesWithAttributes("myrole" to mapOf("registry:unchained" to "editor"))
+     */
+    protected fun setRolesWithAttributes(vararg roleConfigs: Pair<String, Map<String, String>>) {
+        val roles = roleConfigs.map { (roleName, attributes) ->
+            createClientRoleWithAttributes(roleName, attributes)
+        }
+        given(userModel.roleMappingsStream).willAnswer { roles.stream() }
+    }
+
     protected fun setScope(scope: String = "") {
         val actualScope = scope.ifEmpty { null }
         given(clientSession.getNote(DockerAuthV2Protocol.SCOPE_PARAM)).willReturn(actualScope)
@@ -185,13 +197,27 @@ abstract class AbstractScopeMapperTestSuite {
 
     private fun createClientRolesByNames(vararg names: String): Collection<RoleModel> {
         return names.map { roleName ->
-            val role = Mockito.mock(RoleModel::class.java)
-            val container = Mockito.mock(ClientModel::class.java)
-            given(container.id).willReturn(CLIENT_ID)
-            given(role.name).willReturn(roleName)
-            given(role.container).willReturn(container)
-            role
+            createClientRoleWithAttributes(roleName, emptyMap())
         }
+    }
+
+    private fun createClientRoleWithAttributes(roleName: String, attributes: Map<String, String>): RoleModel {
+        val role = Mockito.mock(RoleModel::class.java)
+        val container = Mockito.mock(ClientModel::class.java)
+        given(container.id).willReturn(CLIENT_ID)
+        given(role.name).willReturn(roleName)
+        given(role.container).willReturn(container)
+        // Mock getAttributeStream to return the attribute value for matching keys
+        BDDMockito.given(role.getAttributeStream(Mockito.anyString())).willAnswer { invocation ->
+            val key = invocation.getArgument<String>(0)
+            val value = attributes[key]
+            if (value != null) {
+                java.util.stream.Stream.of(value)
+            } else {
+                java.util.stream.Stream.empty<String>()
+            }
+        }
+        return role
     }
 
 }
