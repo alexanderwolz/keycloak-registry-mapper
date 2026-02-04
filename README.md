@@ -111,6 +111,7 @@ Add attributes to any client role using the format:
 | ```registry:myrepo``` | ```pull,push``` | Pull and push access to myrepo namespace |
 | ```registry:myrepo``` | ```pull,push,delete``` | Full access to myrepo namespace |
 | ```registry:myrepo``` | ```*``` | Full access (expands to pull,push,delete) |
+| ```registry``` | ```catalog``` | Grants catalog access regardless of REGISTRY_CATALOG_AUDIENCE |
 
 ### How Role Attributes Combine with Groups
 
@@ -161,6 +162,17 @@ Create a role "project-alpha" with multiple attributes:
 - ```registry:shared-libs``` = ```pull```
 
 Result: Assign this single role to grant access to all project namespaces with appropriate permissions.
+
+**Use Case 4: Grant catalog access to specific users without changing global settings**
+
+By default, ```REGISTRY_CATALOG_AUDIENCE``` is set to ```admin```, meaning only admins can list repositories.
+To grant catalog access to specific users or roles without changing the global setting:
+
+Solution: Create a role with attribute:
+- Key: ```registry```
+- Value: ```catalog```
+
+Result: Users with this role can access the registry catalog (list repositories), while other non-admin users remain restricted.
 
 - - -
 

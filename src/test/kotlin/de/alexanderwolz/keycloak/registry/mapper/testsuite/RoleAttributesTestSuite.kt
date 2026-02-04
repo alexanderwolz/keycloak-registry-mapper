@@ -1,10 +1,16 @@
 package de.alexanderwolz.keycloak.registry.mapper.testsuite
 
+import de.alexanderwolz.keycloak.registry.mapper.AbstractDockerScopeMapper.Companion.ACTION_ALL
 import de.alexanderwolz.keycloak.registry.mapper.AbstractDockerScopeMapper.Companion.ACTION_DELETE
 import de.alexanderwolz.keycloak.registry.mapper.AbstractDockerScopeMapper.Companion.ACTION_PULL
 import de.alexanderwolz.keycloak.registry.mapper.AbstractDockerScopeMapper.Companion.ACTION_PUSH
+import de.alexanderwolz.keycloak.registry.mapper.KeycloakGroupsAndRolesToDockerScopeMapper.Companion.AUDIENCE_ADMIN
+import de.alexanderwolz.keycloak.registry.mapper.KeycloakGroupsAndRolesToDockerScopeMapper.Companion.AUDIENCE_EDITOR
+import de.alexanderwolz.keycloak.registry.mapper.KeycloakGroupsAndRolesToDockerScopeMapper.Companion.AUDIENCE_USER
 import de.alexanderwolz.keycloak.registry.mapper.KeycloakGroupsAndRolesToDockerScopeMapper.Companion.NAMESPACE_SCOPE_GROUP
+import de.alexanderwolz.keycloak.registry.mapper.KeycloakGroupsAndRolesToDockerScopeMapper.Companion.ROLE_ATTRIBUTE_KEY_REGISTRY
 import de.alexanderwolz.keycloak.registry.mapper.KeycloakGroupsAndRolesToDockerScopeMapper.Companion.ROLE_ATTRIBUTE_PREFIX
+import de.alexanderwolz.keycloak.registry.mapper.KeycloakGroupsAndRolesToDockerScopeMapper.Companion.ROLE_ATTRIBUTE_VALUE_CATALOG
 import de.alexanderwolz.keycloak.registry.mapper.KeycloakGroupsAndRolesToDockerScopeMapper.Companion.ROLE_EDITOR
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -52,6 +58,9 @@ class RoleAttributesTestSuite : AbstractScopeMapperTestSuite() {
         private const val ATTR_REPO1 = "${ROLE_ATTRIBUTE_PREFIX}$NAMESPACE_REPO1"
         private const val ATTR_REPO2 = "${ROLE_ATTRIBUTE_PREFIX}$NAMESPACE_REPO2"
         private const val ATTR_REPO3 = "${ROLE_ATTRIBUTE_PREFIX}$NAMESPACE_REPO3"
+
+        // Catalog scope
+        const val SCOPE_CATALOG = "registry:catalog:*"
     }
 
     @Nested
@@ -395,6 +404,146 @@ class RoleAttributesTestSuite : AbstractScopeMapperTestSuite() {
             )
             setScope(SCOPE_REPO1_PULL_PUSH)
             assertContainsOneAccessItemWithActions(ACTION_PULL, ACTION_PUSH)
+        }
+    }
+
+    /**
+     * Tests for catalog access via role attributes.
+     *
+     * The attribute key "registry" with value "catalog" grants catalog access
+     * regardless of the global REGISTRY_CATALOG_AUDIENCE setting.
+     */
+    @Nested
+    inner class CatalogAccessViaAttributeTests {
+
+        @Test
+        internal fun user_with_catalog_attribute_gets_catalog_access_when_audience_is_admin() {
+            // User has no special role, but has catalog attribute
+            // REGISTRY_CATALOG_AUDIENCE defaults to admin, so normally denied
+            setAudience(AUDIENCE_ADMIN)
+            setRolesWithAttributes(
+                "catalog-role" to mapOf(ROLE_ATTRIBUTE_KEY_REGISTRY to ROLE_ATTRIBUTE_VALUE_CATALOG)
+            )
+            setScope(SCOPE_CATALOG)
+            assertContainsOneAccessItemWithActions(ACTION_ALL)
+        }
+
+        @Test
+        internal fun editor_with_catalog_attribute_gets_catalog_access_when_audience_is_admin() {
+            // Editor would normally be denied when audience=admin
+            setAudience(AUDIENCE_ADMIN)
+            setRolesWithAttributes(
+                ROLE_EDITOR to emptyMap(),
+                "catalog-role" to mapOf(ROLE_ATTRIBUTE_KEY_REGISTRY to ROLE_ATTRIBUTE_VALUE_CATALOG)
+            )
+            setScope(SCOPE_CATALOG)
+            assertContainsOneAccessItemWithActions(ACTION_ALL)
+        }
+
+        @Test
+        internal fun user_without_catalog_attribute_denied_when_audience_is_admin() {
+            // User has a role but no catalog attribute - should be denied
+            setAudience(AUDIENCE_ADMIN)
+            setRolesWithAttributes(
+                "some-role" to mapOf(ATTR_REPO1 to "pull,push")
+            )
+            setScope(SCOPE_CATALOG)
+            assertEmptyAccessItems()
+        }
+
+        @Test
+        internal fun editor_without_catalog_attribute_denied_when_audience_is_admin() {
+            // Editor has no catalog attribute and audience=admin - should be denied
+            setAudience(AUDIENCE_ADMIN)
+            setRoles(ROLE_EDITOR)
+            setScope(SCOPE_CATALOG)
+            assertEmptyAccessItems()
+        }
+
+        @Test
+        internal fun editor_without_catalog_attribute_allowed_when_audience_is_editor() {
+            // Editor should be allowed via audience setting
+            setAudience(AUDIENCE_EDITOR)
+            setRoles(ROLE_EDITOR)
+            setScope(SCOPE_CATALOG)
+            assertContainsOneAccessItemWithActions(ACTION_ALL)
+        }
+
+        @Test
+        internal fun user_without_catalog_attribute_allowed_when_audience_is_user() {
+            // Any user should be allowed when audience=user
+            setAudience(AUDIENCE_USER)
+            setRolesWithAttributes(
+                "some-role" to emptyMap()
+            )
+            setScope(SCOPE_CATALOG)
+            assertContainsOneAccessItemWithActions(ACTION_ALL)
+        }
+
+        @Test
+        internal fun catalog_attribute_case_insensitive() {
+            // Value check should be case-insensitive
+            setAudience(AUDIENCE_ADMIN)
+            setRolesWithAttributes(
+                "catalog-role" to mapOf(ROLE_ATTRIBUTE_KEY_REGISTRY to "CATALOG")
+            )
+            setScope(SCOPE_CATALOG)
+            assertContainsOneAccessItemWithActions(ACTION_ALL)
+        }
+
+        @Test
+        internal fun wrong_attribute_value_denied() {
+            // Key is "registry" but value is NOT "catalog" - should be denied
+            setAudience(AUDIENCE_ADMIN)
+            setRolesWithAttributes(
+                "wrong-value-role" to mapOf(ROLE_ATTRIBUTE_KEY_REGISTRY to "something_else")
+            )
+            setScope(SCOPE_CATALOG)
+            assertEmptyAccessItems()
+        }
+
+        @Test
+        internal fun multiple_roles_one_with_catalog_attribute() {
+            // User has multiple roles, only one grants catalog access
+            setAudience(AUDIENCE_ADMIN)
+            setRolesWithAttributes(
+                "namespace-role" to mapOf(ATTR_REPO1 to "pull,push"),
+                "catalog-role" to mapOf(ROLE_ATTRIBUTE_KEY_REGISTRY to ROLE_ATTRIBUTE_VALUE_CATALOG)
+            )
+            setScope(SCOPE_CATALOG)
+            assertContainsOneAccessItemWithActions(ACTION_ALL)
+        }
+
+        @Test
+        internal fun catalog_attribute_combined_with_namespace_attribute() {
+            // User has both catalog access and namespace permissions via attributes
+            setAudience(AUDIENCE_ADMIN)
+            setNamespaceScope(NAMESPACE_SCOPE_GROUP)
+            setRolesWithAttributes(
+                "multi-access-role" to mapOf(
+                    ROLE_ATTRIBUTE_KEY_REGISTRY to ROLE_ATTRIBUTE_VALUE_CATALOG,
+                    ATTR_REPO1 to "pull,push"
+                )
+            )
+            // Can access catalog
+            setScope(SCOPE_CATALOG)
+            assertContainsOneAccessItemWithActions(ACTION_ALL)
+        }
+
+        @Test
+        internal fun catalog_attribute_combined_with_namespace_attribute_can_push() {
+            // Same user from above can also push to the namespace
+            setAudience(AUDIENCE_ADMIN)
+            setNamespaceScope(NAMESPACE_SCOPE_GROUP)
+            setRolesWithAttributes(
+                "multi-access-role" to mapOf(
+                    ROLE_ATTRIBUTE_KEY_REGISTRY to ROLE_ATTRIBUTE_VALUE_CATALOG,
+                    ATTR_REPO1 to "pull,push"
+                )
+            )
+            // Can also push to repository-1
+            setScope(SCOPE_REPO1_PUSH)
+            assertContainsOneAccessItemWithActions(ACTION_PUSH)
         }
     }
 }

@@ -41,6 +41,10 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
 
         // Role attribute prefix for namespace permissions (e.g., "registry:myrepo" = "pull,push")
         internal const val ROLE_ATTRIBUTE_PREFIX = "registry:"
+
+        // Role attribute key and value for catalog access (key: "registry", value: "catalog")
+        internal const val ROLE_ATTRIBUTE_KEY_REGISTRY = "registry"
+        internal const val ROLE_ATTRIBUTE_VALUE_CATALOG = "catalog"
     }
 
     internal var groupPrefix = getGroupPrefixFromEnv()
@@ -93,7 +97,7 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
 
         //users and editors
         if (accessItem.type == ACCESS_TYPE_REGISTRY) {
-            return handleRegistryAccess(responseToken, clientRoleNames, accessItem, user)
+            return handleRegistryAccess(responseToken, clientRoleNames, clientRoles, accessItem, user)
         }
 
         if (accessItem.type == ACCESS_TYPE_REPOSITORY) {
@@ -111,24 +115,45 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
     private fun handleRegistryAccess(
         responseToken: DockerResponseToken,
         clientRoleNames: Collection<String>,
+        clientRoles: Collection<RoleModel>,
         accessItem: DockerScopeAccess,
         user: UserModel
     ): DockerResponseToken {
         if (accessItem.name == NAME_CATALOG) {
+            // Check role attributes first
+            if (hasCatalogAccessFromRoleAttributes(clientRoles)) {
+                return allowAll(responseToken, accessItem, user, "Catalog access via role attribute")
+            }
+            // Then check global catalogAudience
             if (isAllowedToAccessRegistryCatalogScope(clientRoleNames)) {
                 val reason = "Allowed by catalog audience '$catalogAudience'"
                 return allowAll(responseToken, accessItem, user, reason)
             }
             val reason = if (clientRoleNames.contains(ROLE_EDITOR)) {
-                "Role '$ROLE_ADMIN' or \$${KEY_REGISTRY_CATALOG_AUDIENCE}='$AUDIENCE_EDITOR' needed to access catalog"
+                "Role '$ROLE_ADMIN' or \$${KEY_REGISTRY_CATALOG_AUDIENCE}='$AUDIENCE_EDITOR' or role attribute '$ROLE_ATTRIBUTE_KEY_REGISTRY'='$ROLE_ATTRIBUTE_VALUE_CATALOG' needed to access catalog"
             } else {
-                "Role '$ROLE_ADMIN' or \$${KEY_REGISTRY_CATALOG_AUDIENCE}='$AUDIENCE_USER' needed to access catalog"
+                "Role '$ROLE_ADMIN' or \$${KEY_REGISTRY_CATALOG_AUDIENCE}='$AUDIENCE_USER' or role attribute '$ROLE_ATTRIBUTE_KEY_REGISTRY'='$ROLE_ATTRIBUTE_VALUE_CATALOG' needed to access catalog"
             }
             return deny(responseToken, accessItem, user, reason)
         }
         //only admins can access scope 'registry'
         val reason = "Role '$ROLE_ADMIN' needed to access registry scope"
         return deny(responseToken, accessItem, user, reason)
+    }
+
+    /**
+     * Checks if any of the user's roles have the catalog access attribute.
+     * The attribute key is "registry" and the value must be "catalog".
+     */
+    internal fun hasCatalogAccessFromRoleAttributes(clientRoles: Collection<RoleModel>): Boolean {
+        for (role in clientRoles) {
+            val attributeValues = role.getAttributeStream(ROLE_ATTRIBUTE_KEY_REGISTRY).toList()
+            if (attributeValues.any { it.lowercase() == ROLE_ATTRIBUTE_VALUE_CATALOG }) {
+                logger.debug { "Role '${role.name}' grants catalog access via attribute" }
+                return true
+            }
+        }
+        return false
     }
 
     private fun isAllowedToAccessRegistryCatalogScope(clientRoleNames: Collection<String>): Boolean {
