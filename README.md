@@ -4,7 +4,7 @@
 ![GitHub](https://img.shields.io/badge/keycloak-26.4.0-orange)
 ![GitHub](https://img.shields.io/badge/registry-2.8.2-orange)
 ![GitHub](https://img.shields.io/github/license/alexanderwolz/keycloak-registry-mapper)
-![GitHub](https://img.shields.io/badge/test_cases-632-informational)
+![GitHub](https://img.shields.io/badge/test_cases-657-informational)
 ![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/alexanderwolz/keycloak-registry-mapper)
 ![GitHub all releases](https://img.shields.io/github/downloads/alexanderwolz/keycloak-registry-mapper/total?color=informational)
 
@@ -30,6 +30,7 @@ Alternatively use a pre-built Keycloak Docker [image](https://hub.docker.com/r/a
 - Assigning the client role ```admin``` will allow access to any resource in the whole registry and give full access.
 - Users could be grouped to domain-namespaces according to their email-addresses  (can be configured via environment variables, default off)
 - Without having any roles and groups assigned, users will have full access to the namespace if it matches their username (can be configured via environment variables, default off)
+- **Role attributes** can be used to grant per-namespace permissions without requiring group membership (see below)
 
 ## ⚙️ Configuration
 This mapper supports following environment variables (either set on server or in docker container):
@@ -93,6 +94,73 @@ Keycloak must be setup to have a docker-v2 registry client, roles and optional g
 6. Now the user will have access to registry namespace *myregistry.com/mycompany/*
 
 ![Keycloak Registry Client Config](assets/keycloak-config/assign_role_and_group_to_user.gif)
+
+## 🎯 Per-Namespace Permissions with Role Attributes
+
+Role attributes allow you to define fine-grained, per-namespace permissions directly on client roles. This is useful when users need different permission levels for different namespaces.
+
+### Role Attribute Format
+
+Add attributes to any client role using the format:
+- **Key:** ```registry:{namespace}```
+- **Value:** ```pull```, ```push```, ```delete```, or ```*``` (comma-separated for multiple actions)
+
+| Attribute Key | Attribute Value | Result |
+|---------------|-----------------|--------|
+| ```registry:myrepo``` | ```pull``` | Pull-only access to myrepo namespace |
+| ```registry:myrepo``` | ```pull,push``` | Pull and push access to myrepo namespace |
+| ```registry:myrepo``` | ```pull,push,delete``` | Full access to myrepo namespace |
+| ```registry:myrepo``` | ```*``` | Full access (expands to pull,push,delete) |
+
+### How Role Attributes Combine with Groups
+
+| Access Method | Permissions |
+|---------------|-------------|
+| Group membership only | pull (read-only by default) |
+| Group + ```editor``` role | pull, push, delete |
+| Group + role attribute | Group permissions + attribute permissions (combined) |
+| Role attribute only (no group) | Exactly what's specified in the attribute |
+
+### Setup Role Attributes in Keycloak
+
+1. Go to your realm and choose "Clients" section
+2. Select your registry client (e.g., "myregistry")
+3. Go to "Roles" tab
+4. Create a new role or select an existing one
+5. Go to the "Attributes" tab
+6. Add attributes with key ```registry:{namespace}``` and value as the allowed actions
+
+### Example Use Cases
+
+**Use Case 1: User needs push access to one specific namespace**
+
+User is member of groups ```registry-repository-1``` and ```registry-repository-2``` (pull-only by default).
+User needs push access to ```repository-1``` but not ```repository-2```.
+
+Solution: Create a role with attribute:
+- Key: ```registry:repository-1```
+- Value: ```push```
+
+Result: User gets pull from both repos (via groups), plus push to repository-1 (via attribute).
+
+**Use Case 2: User needs access to a namespace without group membership**
+
+User needs pull,push access to ```repository-3``` but should not be added to any group.
+
+Solution: Create a role with attribute:
+- Key: ```registry:repository-3```
+- Value: ```pull,push```
+
+Result: User gets pull,push access to repository-3 directly via the role attribute.
+
+**Use Case 3: Create a project role that bundles multiple namespace permissions**
+
+Create a role "project-alpha" with multiple attributes:
+- ```registry:project-frontend``` = ```pull,push,delete```
+- ```registry:project-backend``` = ```pull,push,delete```
+- ```registry:shared-libs``` = ```pull```
+
+Result: Assign this single role to grant access to all project namespaces with appropriate permissions.
 
 - - -
 
