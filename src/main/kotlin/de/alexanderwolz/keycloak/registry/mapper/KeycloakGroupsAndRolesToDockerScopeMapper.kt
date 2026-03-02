@@ -20,7 +20,7 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
         internal const val KEY_REGISTRY_GROUP_PREFIX = "REGISTRY_GROUP_PREFIX"
         internal const val DEFAULT_REGISTRY_GROUP_PREFIX = "registry-"
 
-        private const val ROLE_USER = "user"
+        internal const val ROLE_USER = "user"
         internal const val ROLE_EDITOR = "editor"
         internal const val ROLE_ADMIN = "admin"
 
