@@ -10,7 +10,6 @@ import org.keycloak.protocol.docker.DockerAuthV2Protocol
 import org.keycloak.protocol.docker.mapper.DockerAuthV2ProtocolMapper
 import org.keycloak.representations.docker.DockerAccess
 import org.keycloak.representations.docker.DockerResponseToken
-import java.util.stream.Collectors
 
 abstract class AbstractDockerScopeMapper(
     private val id: String,
@@ -31,22 +30,15 @@ abstract class AbstractDockerScopeMapper(
         const val ACCESS_TYPE_REGISTRY = "registry"
         const val ACCESS_TYPE_REPOSITORY = "repository"
         const val ACCESS_TYPE_REPOSITORY_PLUGIN = "repository(plugin)"
-
     }
 
     internal val logger = Logger(javaClass)
 
-    override fun getId(): String {
-        return id
-    }
+    override fun getId(): String = id
 
-    override fun getDisplayType(): String {
-        return displayType
-    }
+    override fun getDisplayType(): String = displayType
 
-    override fun getHelpText(): String {
-        return helpText
-    }
+    override fun getHelpText(): String = helpText
 
     internal fun getScopesFromSession(clientSession: AuthenticatedClientSessionModel): Collection<String> {
         val scopeString = clientSession.getNote(DockerAuthV2Protocol.SCOPE_PARAM)
@@ -68,6 +60,7 @@ abstract class AbstractDockerScopeMapper(
     }
 
     internal fun getClientRoleNames(user: UserModel, client: ClientModel): Collection<String> {
+        // distinct() is intentionally kept for readability, though containsAll() doesn't require uniqueness
         return RoleUtils.getDeepUserRoleMappings(user)
             .filter { it.container is ClientModel && it.container.id == client.id }
             .map(RoleModel::getName)
@@ -83,7 +76,7 @@ abstract class AbstractDockerScopeMapper(
                 return domain
             }
         }
-        return null //no valid domain
+        return null
     }
 
     internal fun getSecondLevelDomainFromEmail(email: String): String? {
@@ -123,7 +116,6 @@ abstract class AbstractDockerScopeMapper(
     }
 
     internal fun getNamespaceFromRepositoryName(repositoryName: String): String? {
-        //namespace can be followed of sub-namespaces (segments) divided by / (slash)
         val parts = repositoryName.split("/")
         if (parts.size > 1) {
             return parts[0].lowercase()
@@ -132,11 +124,11 @@ abstract class AbstractDockerScopeMapper(
     }
 
     internal fun substituteRequestedActions(requestedActions: Collection<String>): List<String> {
-        // replaces '*' by pull, push and delete
-        return HashSet(requestedActions).also { actions ->
-            if (actions.contains(ACTION_ALL)) {
-                actions.remove(ACTION_ALL)
-                actions.addAll(ACTION_ALL_SUBSTITUTE)
+        return buildSet {
+            addAll(requestedActions)
+            if (contains(ACTION_ALL)) {
+                remove(ACTION_ALL)
+                addAll(ACTION_ALL_SUBSTITUTE)
             }
         }.toList()
     }
@@ -148,7 +140,6 @@ abstract class AbstractDockerScopeMapper(
         reason: String
     ): DockerResponseToken {
         logger.debug { "Granting access for user '${user.username}' on scope '${accessItem.scope}': $reason" }
-
         responseToken.accessItems.add(accessItem)
         return responseToken
     }
@@ -187,5 +178,4 @@ abstract class AbstractDockerScopeMapper(
 
     // cache plain scope into DockerAccess class
     internal class DockerScopeAccess(val scope: String) : DockerAccess(scope)
-
 }
