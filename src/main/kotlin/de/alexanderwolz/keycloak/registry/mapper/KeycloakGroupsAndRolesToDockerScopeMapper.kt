@@ -20,12 +20,10 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
         internal const val KEY_REGISTRY_GROUP_PREFIX = "REGISTRY_GROUP_PREFIX"
         internal const val DEFAULT_REGISTRY_GROUP_PREFIX = "registry-"
 
-        // anybody with access to namespace repo is considered 'user'
         private const val ROLE_USER = "user"
         internal const val ROLE_EDITOR = "editor"
         internal const val ROLE_ADMIN = "admin"
 
-        // can be 'user' or 'editor' or both separated by ','
         internal const val KEY_REGISTRY_CATALOG_AUDIENCE = "REGISTRY_CATALOG_AUDIENCE"
         internal const val AUDIENCE_USER = ROLE_USER
         internal const val AUDIENCE_EDITOR = ROLE_EDITOR
@@ -37,12 +35,36 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
         internal const val NAMESPACE_SCOPE_DOMAIN = "domain"
         internal const val NAMESPACE_SCOPE_SLD = "sld"
         internal val NAMESPACE_SCOPE_DEFAULT = setOf(NAMESPACE_SCOPE_GROUP)
+
+        // reserved namespace names that must not be used as Keycloak group names
+        internal val RESERVED_NAMESPACES = setOf(NAME_CATALOG, "default")
     }
 
     // will be overridden by tests
     internal var groupPrefix = getGroupPrefixFromEnv()
     internal var catalogAudience = getCatalogAudienceFromEnv()
     internal var namespaceScope = getNamespaceScopeFromEnv()
+
+    /**
+     * Represents a parsed Keycloak group path entry.
+     *
+     * Group path structure: /<groupPrefix><namespace>[/<repoPath>]/<role>
+     *
+     * Examples:
+     *   /registry-company1/user              -> namespace=company1, repoPath=null,        role=user
+     *   /registry-company1/editor            -> namespace=company1, repoPath=null,        role=editor
+     *   /registry-company1/myrepo/editor     -> namespace=company1, repoPath=myrepo,      role=editor
+     *   /registry-company1/team/myrepo/user  -> namespace=company1, repoPath=team/myrepo, role=user
+     *
+     * The last path segment must always be 'user' or 'editor' (the role leaf).
+     * Everything between namespace and role is treated as the repo path.
+     */
+    internal data class GroupAccess(
+        val namespace: String,
+        val repoPath: String?,          // null = namespace-level, otherwise full repo path e.g. "myrepo" or "team/myrepo"
+        val isEditor: Boolean,          // true = editor (pull+push+delete), false = user (pull only)
+        val hasExplicitRole: Boolean    // false = plain namespace group (e.g. registry-johnny), role comes from client role
+    )
 
     override fun appliesTo(responseToken: DockerResponseToken?): Boolean {
         return true
@@ -83,6 +105,7 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
         user: UserModel,
     ): DockerResponseToken {
 
+        // admin always wins
         if (clientRoleNames.contains(ROLE_ADMIN)) {
             return allowAll(responseToken, accessItem, user, "User has role '$ROLE_ADMIN'")
         }
@@ -132,34 +155,29 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
             responseToken, accessItem, user, "Role '$ROLE_ADMIN' needed to access default namespace repositories"
         )
 
+        // username scope: user always has full access to their own namespace
         if (namespaceScope.contains(NAMESPACE_SCOPE_USERNAME) && isUsernameRepository(namespace, user.username)) {
             val allowedActions = substituteRequestedActions(accessItem.actions)
             return allowWithActions(responseToken, accessItem, allowedActions, user, "Accessing user's own namespace")
         }
 
+        // domain/sld scopes: namespace matched via email, client role determines privileges
         if (namespaceScope.contains(NAMESPACE_SCOPE_DOMAIN) && isDomainRepository(namespace, user.email)) {
-            return handleNamespaceRepositoryAccess(responseToken, accessItem, clientRoleNames, user)
+            val isEditor = clientRoleNames.contains(ROLE_EDITOR)
+            return handleNamespaceRepositoryAccess(
+                responseToken, accessItem, isEditor, user, "Namespace match via domain"
+            )
         }
 
         if (namespaceScope.contains(NAMESPACE_SCOPE_SLD) && isSecondLevelDomainRepository(namespace, user.email)) {
-            return handleNamespaceRepositoryAccess(responseToken, accessItem, clientRoleNames, user)
+            val isEditor = clientRoleNames.contains(ROLE_EDITOR)
+            return handleNamespaceRepositoryAccess(
+                responseToken, accessItem, isEditor, user, "Namespace match via sld"
+            )
         }
 
         if (namespaceScope.contains(NAMESPACE_SCOPE_GROUP)) {
-            val namespacesFromGroups = getUserNamespacesFromGroups(user).also {
-                if (it.isEmpty()) {
-                    return deny(responseToken, accessItem, user, "User does not belong to any namespace - check groups")
-                }
-            }
-            if (namespacesFromGroups.contains(namespace)) {
-                return handleNamespaceRepositoryAccess(responseToken, accessItem, clientRoleNames, user)
-            }
-            return deny(
-                responseToken,
-                accessItem,
-                user,
-                "Missing namespace group '$groupPrefix$namespace' - check groups"
-            )
+            return handleGroupScopeAccess(responseToken, accessItem, clientRoleNames, namespace, user)
         }
 
         return deny(
@@ -168,51 +186,191 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
         )
     }
 
-    internal fun getUserNamespacesFromGroups(user: UserModel): Collection<String> {
-        val topLevelGroups = user.groupsStream.toList()
-        val allSubGroups = topLevelGroups.flatMap { it.subGroupsStream.toList() }
-        val allGroups = topLevelGroups + allSubGroups
-        return allGroups
-            .filter { it.name.lowercase().startsWith(groupPrefix) }
-            .map { it.name.lowercase().replace(groupPrefix, "") }
+    private fun handleGroupScopeAccess(
+        responseToken: DockerResponseToken,
+        accessItem: DockerScopeAccess,
+        clientRoleNames: Collection<String>,
+        namespace: String,
+        user: UserModel
+    ): DockerResponseToken {
+
+        val groupAccesses = getUserGroupAccesses(user)
+
+        if (groupAccesses.isEmpty()) {
+            return deny(responseToken, accessItem, user, "User does not belong to any namespace - check groups")
+        }
+
+        val requestedRepoPath = getRepoPathFromRepositoryName(accessItem.name)
+
+        // 1. repo-level override: check if user has explicit group for this exact repo
+        if (requestedRepoPath != null) {
+            val repoAccess = groupAccesses.find {
+                it.namespace == namespace && it.repoPath == requestedRepoPath
+            }
+            if (repoAccess != null) {
+                return handleNamespaceRepositoryAccess(
+                    responseToken, accessItem, repoAccess.isEditor, user,
+                    "Repo-level group override for '$namespace/$requestedRepoPath'"
+                )
+            }
+        }
+
+        // 2. namespace-level access: user has a namespace-level group (repoPath == null)
+        // if group has explicit role (user/editor leaf), use that; otherwise fall back to client role
+        val namespaceAccess = groupAccesses.find { it.namespace == namespace && it.repoPath == null }
+        if (namespaceAccess != null) {
+            val isEditor = if (namespaceAccess.hasExplicitRole) {
+                namespaceAccess.isEditor
+            } else {
+                clientRoleNames.contains(ROLE_EDITOR)
+            }
+            return handleNamespaceRepositoryAccess(
+                responseToken, accessItem, isEditor, user,
+                "Namespace-level group match for '$namespace'"
+            )
+        }
+
+        // 3. user has repo-level access in this namespace but not for this specific repo
+        val hasAnyAccessInNamespace = groupAccesses.any { it.namespace == namespace }
+        if (hasAnyAccessInNamespace) {
+            return deny(
+                responseToken, accessItem, user,
+                "No matching repo-level group for '$namespace/${requestedRepoPath ?: ""}' - check groups"
+            )
+        }
+
+        return deny(
+            responseToken, accessItem, user,
+            "Missing namespace group '$groupPrefix$namespace' - check groups"
+        )
+    }
+
+    /**
+     * Returns the repo path from a repository name, i.e. everything after the namespace segment.
+     * Returns null if there is no repo path beyond the namespace.
+     *
+     * Examples:
+     *   "namespace/myrepo"         -> "myrepo"
+     *   "namespace/team/myrepo"    -> "team/myrepo"
+     *   "image"                    -> null (no namespace)
+     */
+    internal fun getRepoPathFromRepositoryName(repositoryName: String): String? {
+        val parts = repositoryName.split("/")
+        if (parts.size < 2) return null
+        return parts.drop(1).joinToString("/")
+    }
+
+    /**
+     * Builds the full group path by traversing the parent chain upwards.
+     * Returns a slash-separated path without a leading slash,
+     * e.g. "registry-company1/myrepo/editor".
+     */
+    internal fun buildGroupPath(group: GroupModel): String {
+        val segments = mutableListOf(group.name)
+        var parent = group.parent
+        while (parent != null) {
+            segments.add(0, parent.name)
+            parent = parent.parent
+        }
+        return segments.joinToString("/")
+    }
+
+    /**
+     * Parses all Keycloak group memberships of a user into [GroupAccess] objects.
+     *
+     * Note: user.groupsStream returns ALL groups the user is directly a member of,
+     * including nested subgroups - Keycloak flattens this automatically.
+     * Groups that do not match the expected structure are silently ignored.
+     */
+    internal fun getUserGroupAccesses(user: UserModel): List<GroupAccess> {
+        return user.groupsStream.toList().mapNotNull { group ->
+            parseGroupPath(buildGroupPath(group))
+        }
+    }
+
+    /**
+     * Parses a Keycloak group path into a [GroupAccess] object.
+     *
+     * Path format: /<groupPrefix><namespace>[/<repoSegments...>]/<role>
+     *
+     * The last segment must be 'user' or 'editor'.
+     * Returns null if the path does not match the expected structure.
+     */
+    internal fun parseGroupPath(path: String): GroupAccess? {
+        // Keycloak paths always start with /, e.g. /registry-company1/myrepo/editor
+        val normalizedPath = path.lowercase().trimStart('/')
+        val segments = normalizedPath.split("/")
+
+        // first segment must start with groupPrefix
+        val firstSegment = segments[0]
+        if (!firstSegment.startsWith(groupPrefix)) return null
+
+        // extract namespace (everything after the prefix in the first segment)
+        val namespace = firstSegment.removePrefix(groupPrefix)
+        if (namespace.isEmpty()) return null
+
+        // plain namespace group e.g. registry-johnny (no role leaf)
+        // role is determined by client role, not group
+        if (segments.size == 1) {
+            return GroupAccess(namespace, repoPath = null, isEditor = false, hasExplicitRole = false)
+        }
+
+        // last segment must be the role leaf
+        val roleLeaf = segments.last()
+        val isEditor = when (roleLeaf) {
+            ROLE_EDITOR -> true
+            ROLE_USER -> false
+            else -> return null // not a valid role leaf, ignore this group
+        }
+
+        // everything between namespace segment and role leaf is the repo path
+        val repoSegments = segments.drop(1).dropLast(1)
+        val repoPath = if (repoSegments.isEmpty()) null else repoSegments.joinToString("/")
+
+        return GroupAccess(namespace, repoPath, isEditor, hasExplicitRole = true)
     }
 
     private fun handleNamespaceRepositoryAccess(
         responseToken: DockerResponseToken,
         accessItem: DockerScopeAccess,
-        clientRoleNames: Collection<String>,
-        user: UserModel
+        isEditor: Boolean,
+        user: UserModel,
+        context: String
     ): DockerResponseToken {
 
         val requestedActions = substituteRequestedActions(accessItem.actions)
-        val allowedActions = filterAllowedActions(requestedActions, clientRoleNames)
+        val allowedActions = filterAllowedActions(requestedActions, isEditor)
 
         if (allowedActions.isEmpty()) {
             return deny(
                 responseToken, accessItem, user,
-                "Missing privileges for actions [${accessItem.actions.joinToString()}] - check client roles"
+                "Missing privileges for actions [${accessItem.actions.joinToString()}] - $context"
             )
         }
 
         val reason = if (hasAllPrivileges(allowedActions, requestedActions)) {
-            "User has privilege on all actions"
+            "User has privilege on all actions ($context)"
         } else {
-            "User has privilege only on [${allowedActions.joinToString()}]"
+            "User has privilege only on [${allowedActions.joinToString()}] ($context)"
         }
         return allowWithActions(responseToken, accessItem, allowedActions, user, reason)
     }
 
+    /**
+     * Filters the requested actions based on whether the user is an editor or just a user.
+     * Editor: pull, push, delete, *
+     * User: pull only
+     */
     internal fun filterAllowedActions(
         requestedActions: Collection<String>,
-        clientRoleNames: Collection<String>,
+        isEditor: Boolean
     ): List<String> {
-        val isPrivileged = clientRoleNames.contains(ROLE_EDITOR) || clientRoleNames.contains(ROLE_ADMIN)
         return requestedActions.flatMap { action ->
             when (action) {
                 ACTION_PULL -> listOf(ACTION_PULL)
-                ACTION_PUSH -> if (isPrivileged) listOf(ACTION_PUSH) else emptyList()
-                ACTION_DELETE -> if (isPrivileged) listOf(ACTION_DELETE) else emptyList()
-                ACTION_ALL -> if (isPrivileged) listOf(ACTION_ALL) else listOf(ACTION_PULL)
+                ACTION_PUSH -> if (isEditor) listOf(ACTION_PUSH) else emptyList()
+                ACTION_DELETE -> if (isEditor) listOf(ACTION_DELETE) else emptyList()
+                ACTION_ALL -> if (isEditor) listOf(ACTION_ALL) else listOf(ACTION_PULL)
                 else -> emptyList()
             }
         }.distinct()

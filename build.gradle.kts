@@ -9,10 +9,10 @@ plugins {
     signing
 }
 
-val keycloakVersion = "26.5.0"
+val keycloakVersion = "26.5.4"
 
 group = "de.alexanderwolz"
-version = "1.9.2"
+version = "1.10.0"
 
 repositories {
     mavenCentral()
