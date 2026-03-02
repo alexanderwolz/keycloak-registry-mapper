@@ -3,7 +3,6 @@ package de.alexanderwolz.keycloak.registry.mapper
 import org.keycloak.models.*
 import org.keycloak.protocol.docker.mapper.DockerAuthV2AttributeMapper
 import org.keycloak.representations.docker.DockerResponseToken
-import java.util.stream.Stream
 
 // reference: https://www.baeldung.com/keycloak-custom-protocol-mapper
 // see also https://www.keycloak.org/docs-api/21.1.1/javadocs/org/keycloak/protocol/ProtocolMapper.html
@@ -21,12 +20,12 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
         internal const val KEY_REGISTRY_GROUP_PREFIX = "REGISTRY_GROUP_PREFIX"
         internal const val DEFAULT_REGISTRY_GROUP_PREFIX = "registry-"
 
-        //anybody with access to namespace repo is considered 'user'
+        // anybody with access to namespace repo is considered 'user'
         private const val ROLE_USER = "user"
         internal const val ROLE_EDITOR = "editor"
         internal const val ROLE_ADMIN = "admin"
 
-        //can be 'user' or 'editor' or both separated by ','
+        // can be 'user' or 'editor' or both separated by ','
         internal const val KEY_REGISTRY_CATALOG_AUDIENCE = "REGISTRY_CATALOG_AUDIENCE"
         internal const val AUDIENCE_USER = ROLE_USER
         internal const val AUDIENCE_EDITOR = ROLE_EDITOR
@@ -40,6 +39,7 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
         internal val NAMESPACE_SCOPE_DEFAULT = setOf(NAMESPACE_SCOPE_GROUP)
     }
 
+    // will be overridden by tests
     internal var groupPrefix = getGroupPrefixFromEnv()
     internal var catalogAudience = getCatalogAudienceFromEnv()
     internal var namespaceScope = getNamespaceScopeFromEnv()
@@ -57,19 +57,22 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
     ): DockerResponseToken {
 
         val accessItems = getScopesFromSession(clientSession).map { scope ->
-            parseScopeIntoAccessItem(scope) ?: return responseToken //could not parse scope
+            parseScopeIntoAccessItem(scope) ?: return responseToken
         }
 
         if (accessItems.isEmpty()) {
-            return responseToken // no action items given in scope
+            return responseToken
         }
 
         if (accessItems.first().actions.isEmpty()) {
-            return responseToken // no actions given in scope
+            return responseToken
         }
 
         val clientRoleNames = getClientRoleNames(userSession.user, clientSession.client)
 
+        // NOTE: Only the first access item is processed intentionally.
+        // Docker clients typically send one scope per token request.
+        // Multi-scope requests are not yet supported and will silently ignore additional scopes.
         return handleScopeAccess(responseToken, accessItems.first(), clientRoleNames, userSession.user)
     }
 
@@ -80,27 +83,17 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
         user: UserModel,
     ): DockerResponseToken {
 
-        //admins
         if (clientRoleNames.contains(ROLE_ADMIN)) {
-            //admins can access everything
             return allowAll(responseToken, accessItem, user, "User has role '$ROLE_ADMIN'")
         }
 
-        //users and editors
-        if (accessItem.type == ACCESS_TYPE_REGISTRY) {
-            return handleRegistryAccess(responseToken, clientRoleNames, accessItem, user)
+        return when (accessItem.type) {
+            ACCESS_TYPE_REGISTRY -> handleRegistryAccess(responseToken, clientRoleNames, accessItem, user)
+            ACCESS_TYPE_REPOSITORY -> handleRepositoryAccess(responseToken, clientRoleNames, accessItem, user)
+            // plugins are handled the same as normal repositories
+            ACCESS_TYPE_REPOSITORY_PLUGIN -> handleRepositoryAccess(responseToken, clientRoleNames, accessItem, user)
+            else -> deny(responseToken, accessItem, user, "Unsupported access type '${accessItem.type}'")
         }
-
-        if (accessItem.type == ACCESS_TYPE_REPOSITORY) {
-            return handleRepositoryAccess(responseToken, clientRoleNames, accessItem, user)
-        }
-
-        if (accessItem.type == ACCESS_TYPE_REPOSITORY_PLUGIN) {
-            //handle plugins the same as normal repositories
-            return handleRepositoryAccess(responseToken, clientRoleNames, accessItem, user)
-        }
-
-        return deny(responseToken, accessItem, user, "Unsupported access type '${accessItem.type}'")
     }
 
     private fun handleRegistryAccess(
@@ -111,8 +104,7 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
     ): DockerResponseToken {
         if (accessItem.name == NAME_CATALOG) {
             if (isAllowedToAccessRegistryCatalogScope(clientRoleNames)) {
-                val reason = "Allowed by catalog audience '$catalogAudience'"
-                return allowAll(responseToken, accessItem, user, reason)
+                return allowAll(responseToken, accessItem, user, "Allowed by catalog audience '$catalogAudience'")
             }
             val reason = if (clientRoleNames.contains(ROLE_EDITOR)) {
                 "Role '$ROLE_ADMIN' or \$${KEY_REGISTRY_CATALOG_AUDIENCE}='$AUDIENCE_EDITOR' needed to access catalog"
@@ -121,15 +113,12 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
             }
             return deny(responseToken, accessItem, user, reason)
         }
-        //only admins can access scope 'registry'
-        val reason = "Role '$ROLE_ADMIN' needed to access registry scope"
-        return deny(responseToken, accessItem, user, reason)
+        return deny(responseToken, accessItem, user, "Role '$ROLE_ADMIN' needed to access registry scope")
     }
 
     private fun isAllowedToAccessRegistryCatalogScope(clientRoleNames: Collection<String>): Boolean {
-        return catalogAudience == AUDIENCE_USER || (catalogAudience == AUDIENCE_EDITOR && clientRoleNames.contains(
-            ROLE_EDITOR
-        ))
+        return catalogAudience == AUDIENCE_USER ||
+                (catalogAudience == AUDIENCE_EDITOR && clientRoleNames.contains(ROLE_EDITOR))
     }
 
     private fun handleRepositoryAccess(
@@ -144,7 +133,6 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
         )
 
         if (namespaceScope.contains(NAMESPACE_SCOPE_USERNAME) && isUsernameRepository(namespace, user.username)) {
-            //user's own repository, will have all access
             val allowedActions = substituteRequestedActions(accessItem.actions)
             return allowWithActions(responseToken, accessItem, allowedActions, user, "Accessing user's own namespace")
         }
@@ -160,27 +148,33 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
         if (namespaceScope.contains(NAMESPACE_SCOPE_GROUP)) {
             val namespacesFromGroups = getUserNamespacesFromGroups(user).also {
                 if (it.isEmpty()) {
-                    val reason = "User does not belong to any namespace - check groups"
-                    return deny(responseToken, accessItem, user, reason)
+                    return deny(responseToken, accessItem, user, "User does not belong to any namespace - check groups")
                 }
             }
             if (namespacesFromGroups.contains(namespace)) {
                 return handleNamespaceRepositoryAccess(responseToken, accessItem, clientRoleNames, user)
             }
-            val reason = "Missing namespace group '$groupPrefix$namespace' - check groups"
-            return deny(responseToken, accessItem, user, reason)
+            return deny(
+                responseToken,
+                accessItem,
+                user,
+                "Missing namespace group '$groupPrefix$namespace' - check groups"
+            )
         }
 
-        val reason = "User does not belong to namespace '$namespace' either by group nor username nor domain"
-        return deny(responseToken, accessItem, user, reason)
+        return deny(
+            responseToken, accessItem, user,
+            "User does not belong to namespace '$namespace' either by group nor username nor domain"
+        )
     }
 
     internal fun getUserNamespacesFromGroups(user: UserModel): Collection<String> {
-        val allSubGroups = user.groupsStream.flatMap { it.subGroupsStream }
-        val allGroups = Stream.concat(user.groupsStream, allSubGroups)
-        val filteredGroups = allGroups.filter { it.name.lowercase().startsWith(groupPrefix) }
-        val namespaces = filteredGroups.map { it.name.lowercase().replace(groupPrefix, "") }
-        return namespaces.toList()
+        val topLevelGroups = user.groupsStream.toList()
+        val allSubGroups = topLevelGroups.flatMap { it.subGroupsStream.toList() }
+        val allGroups = topLevelGroups + allSubGroups
+        return allGroups
+            .filter { it.name.lowercase().startsWith(groupPrefix) }
+            .map { it.name.lowercase().replace(groupPrefix, "") }
     }
 
     private fun handleNamespaceRepositoryAccess(
@@ -194,16 +188,17 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
         val allowedActions = filterAllowedActions(requestedActions, clientRoleNames)
 
         if (allowedActions.isEmpty()) {
-            val reason = "Missing privileges for actions [${accessItem.actions.joinToString()}] - check client roles"
-            return deny(responseToken, accessItem, user, reason)
+            return deny(
+                responseToken, accessItem, user,
+                "Missing privileges for actions [${accessItem.actions.joinToString()}] - check client roles"
+            )
         }
 
-        if (hasAllPrivileges(allowedActions, requestedActions)) {
-            val reason = "User has privilege on all actions"
-            return allowWithActions(responseToken, accessItem, allowedActions, user, reason)
+        val reason = if (hasAllPrivileges(allowedActions, requestedActions)) {
+            "User has privilege on all actions"
+        } else {
+            "User has privilege only on [${allowedActions.joinToString()}]"
         }
-
-        val reason = "User has privilege only on [${allowedActions.joinToString()}]"
         return allowWithActions(responseToken, accessItem, allowedActions, user, reason)
     }
 
@@ -211,46 +206,24 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
         requestedActions: Collection<String>,
         clientRoleNames: Collection<String>,
     ): List<String> {
-        val allowedActions = ArrayList<String>()
-        val shallAddPrivilegedActions = clientRoleNames.contains(ROLE_EDITOR) || clientRoleNames.contains(ROLE_ADMIN)
-        requestedActions.forEach { action ->
-
-            if (ACTION_PULL == action) {
-                //all users in namespace group can pull images (read only by default)
-                allowedActions.add(action)
+        val isPrivileged = clientRoleNames.contains(ROLE_EDITOR) || clientRoleNames.contains(ROLE_ADMIN)
+        return requestedActions.flatMap { action ->
+            when (action) {
+                ACTION_PULL -> listOf(ACTION_PULL)
+                ACTION_PUSH -> if (isPrivileged) listOf(ACTION_PUSH) else emptyList()
+                ACTION_DELETE -> if (isPrivileged) listOf(ACTION_DELETE) else emptyList()
+                ACTION_ALL -> if (isPrivileged) listOf(ACTION_ALL) else listOf(ACTION_PULL)
+                else -> emptyList()
             }
-
-            if (ACTION_PUSH == action && shallAddPrivilegedActions) {
-                allowedActions.add(action)
-            }
-
-            if (ACTION_DELETE == action && shallAddPrivilegedActions) {
-                allowedActions.add(action)
-            }
-
-            if (ACTION_ALL == action && shallAddPrivilegedActions) {
-                allowedActions.add(action)
-            }
-
-            if (ACTION_ALL == action && !shallAddPrivilegedActions && !allowedActions.contains(ACTION_PULL)) {
-                //not substituted, add pull for unprivileged user (read only by default)
-                allowedActions.add(ACTION_PULL)
-            }
-        }
-        return allowedActions
+        }.distinct()
     }
 
     private fun getCatalogAudienceFromEnv(): String {
-        return getEnvVariable(KEY_REGISTRY_CATALOG_AUDIENCE)?.let {
-            val audienceString = it.lowercase()
-            if (audienceString == AUDIENCE_USER) {
-                return@let AUDIENCE_USER
-            }
-            if (audienceString == AUDIENCE_EDITOR) {
-                return@let AUDIENCE_EDITOR
-            }
-            return@let AUDIENCE_ADMIN
-        } ?: AUDIENCE_ADMIN
+        return when (getEnvVariable(KEY_REGISTRY_CATALOG_AUDIENCE)?.lowercase()) {
+            AUDIENCE_USER -> AUDIENCE_USER
+            AUDIENCE_EDITOR -> AUDIENCE_EDITOR
+            else -> AUDIENCE_ADMIN
+        }
     }
 
     private fun getGroupPrefixFromEnv(): String {
@@ -258,17 +231,16 @@ class KeycloakGroupsAndRolesToDockerScopeMapper : AbstractDockerScopeMapper(
     }
 
     private fun getNamespaceScopeFromEnv(): Set<String> {
-        return getEnvVariable(KEY_REGISTRY_NAMESPACE_SCOPE)?.let { scopeString ->
-            val scopes = scopeString.split(",").map { it.lowercase() }.filter {
-                it == NAMESPACE_SCOPE_GROUP || it == NAMESPACE_SCOPE_USERNAME || it == NAMESPACE_SCOPE_DOMAIN || it == NAMESPACE_SCOPE_SLD
-            }
-            if (scopes.isEmpty()) {
-                logger.warn{"Empty or unsupported config values for \$$KEY_REGISTRY_NAMESPACE_SCOPE: $scopeString"}
-                logger.warn{"Resetting \$$KEY_REGISTRY_NAMESPACE_SCOPE to default: $NAMESPACE_SCOPE_DEFAULT"}
-                NAMESPACE_SCOPE_DEFAULT
-            }
-            scopes.toSet()
-        } ?: NAMESPACE_SCOPE_DEFAULT
-    }
+        val scopeString = getEnvVariable(KEY_REGISTRY_NAMESPACE_SCOPE) ?: return NAMESPACE_SCOPE_DEFAULT
+        val validScopes =
+            setOf(NAMESPACE_SCOPE_GROUP, NAMESPACE_SCOPE_USERNAME, NAMESPACE_SCOPE_DOMAIN, NAMESPACE_SCOPE_SLD)
+        val scopes = scopeString.split(",").map { it.lowercase() }.filter { it in validScopes }.toSet()
 
+        if (scopes.isEmpty()) {
+            logger.warn { "Empty or unsupported config values for \$$KEY_REGISTRY_NAMESPACE_SCOPE: $scopeString" }
+            logger.warn { "Resetting \$$KEY_REGISTRY_NAMESPACE_SCOPE to default: $NAMESPACE_SCOPE_DEFAULT" }
+            return NAMESPACE_SCOPE_DEFAULT
+        }
+        return scopes
+    }
 }
