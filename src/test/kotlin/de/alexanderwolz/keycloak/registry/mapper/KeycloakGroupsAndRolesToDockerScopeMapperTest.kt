@@ -9,204 +9,334 @@ import org.keycloak.models.GroupModel
 import org.keycloak.models.UserModel
 import org.mockito.Mockito
 import org.mockito.kotlin.given
-import java.util.stream.Stream
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
 internal class KeycloakGroupsAndRolesToDockerScopeMapperTest {
 
     private val mapper = KeycloakGroupsAndRolesToDockerScopeMapper()
 
-    @Test
-    fun testGetUserNamespacesFromEmptyGroups() {
-        val user = Mockito.mock(UserModel::class.java)
-        given(user.groupsStream).willAnswer {
-            Stream.empty<GroupModel>()
+    // -------------------------------------------------------------------------
+    // Helper
+    // -------------------------------------------------------------------------
+
+    private fun mockGroup(name: String, parent: GroupModel? = null): GroupModel {
+        return Mockito.mock(GroupModel::class.java).also { group ->
+            given(group.name).willReturn(name)
+            given(group.parent).willReturn(parent)
         }
-        val actualGroupNames = mapper.getUserNamespacesFromGroups(user)
-        assertEquals(0, actualGroupNames.size)
+    }
+
+    private fun mockUser(vararg groups: GroupModel): UserModel {
+        return Mockito.mock(UserModel::class.java).also { user ->
+            given(user.groupsStream).willAnswer { groups.toList().stream() }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // buildGroupPath
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun testBuildGroupPathTopLevel() {
+        val group = mockGroup("registry-company1")
+        assertEquals("registry-company1", mapper.buildGroupPath(group))
     }
 
     @Test
-    fun testGetUserNamespacesFromGroupsAndSubgroups() {
-        val user = Mockito.mock(UserModel::class.java)
-        val groupWithPrefixSubgroup = "parentWithPrefixSubgroup"
-        val groupNames = setOf("${mapper.groupPrefix}company", "otherGroup", groupWithPrefixSubgroup)
-        val subgroupNames = setOf("${mapper.groupPrefix}subgroup", "otherSubgroup")
-        given(user.groupsStream).willAnswer {
-            groupNames.map { groupName ->
-                Mockito.mock(GroupModel::class.java).also { parentGroup ->
-                    given(parentGroup.name).willReturn(groupName)
-                    if (groupName == groupWithPrefixSubgroup) {
-                        given(parentGroup.subGroupsStream).willAnswer {
-                            subgroupNames.map { subgroupName ->
-                                Mockito.mock(GroupModel::class.java).also { childGroup ->
-                                    given(childGroup.name).willReturn(subgroupName)
-                                }
-                            }.stream()
-                        }
-                    }
-                }
-            }.stream()
-        }
-        val expectedGroupNames = setOf("company", "subgroup")
-        val actualGroupNames = mapper.getUserNamespacesFromGroups(user)
-        assertEquals(expectedGroupNames.sorted(), actualGroupNames.sorted())
+    fun testBuildGroupPathWithParent() {
+        val parent = mockGroup("registry-company1")
+        val child = mockGroup("editor", parent)
+        assertEquals("registry-company1/editor", mapper.buildGroupPath(child))
     }
 
     @Test
-    fun testGetUserNamespacesFromSubgroupsOnly() {
-        val user = Mockito.mock(UserModel::class.java)
-        val groupWithPrefixSubgroup = "parentWithPrefixSubgroup"
-        val groupNames = setOf("otherGroup1", "otherGroup2", groupWithPrefixSubgroup)
-        val subgroupNames = setOf("${mapper.groupPrefix}subgroup1", "${mapper.groupPrefix}subgroup2", "otherSubgroup")
-        given(user.groupsStream).willAnswer {
-            groupNames.map { groupName ->
-                Mockito.mock(GroupModel::class.java).also { parentGroup ->
-                    given(parentGroup.name).willReturn(groupName)
-                    if (groupName == groupWithPrefixSubgroup) {
-                        given(parentGroup.subGroupsStream).willAnswer {
-                            subgroupNames.map { subgroupName ->
-                                Mockito.mock(GroupModel::class.java).also { childGroup ->
-                                    given(childGroup.name).willReturn(subgroupName)
-                                }
-                            }.stream()
-                        }
-                    }
-                }
-            }.stream()
-        }
-        val expectedGroupNames = setOf("subgroup1", "subgroup2")
-        val actualGroupNames = mapper.getUserNamespacesFromGroups(user)
-        assertEquals(expectedGroupNames.sorted(), actualGroupNames.sorted())
+    fun testBuildGroupPathWithGrandParent() {
+        val grandParent = mockGroup("registry-company1")
+        val parent = mockGroup("myrepo", grandParent)
+        val child = mockGroup("editor", parent)
+        assertEquals("registry-company1/myrepo/editor", mapper.buildGroupPath(child))
     }
 
     @Test
-    fun testGetUserNamespacesFromCustomGroupPrefix() {
-        val customPrefix = "_MY-GROUP-PREFIX_".lowercase()
+    fun testBuildGroupPathDeepNesting() {
+        val level1 = mockGroup("registry-company1")
+        val level2 = mockGroup("team", level1)
+        val level3 = mockGroup("myrepo", level2)
+        val level4 = mockGroup("user", level3)
+        assertEquals("registry-company1/team/myrepo/user", mapper.buildGroupPath(level4))
+    }
+
+    // -------------------------------------------------------------------------
+    // parseGroupPath
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun testParseGroupPathPlainNamespace() {
+        val result = mapper.parseGroupPath("registry-company1")
+        assertNotNull(result)
+        assertEquals("company1", result.namespace)
+        assertNull(result.repoPath)
+        assertEquals(false, result.isEditor)
+        assertEquals(false, result.hasExplicitRole)
+    }
+
+    @Test
+    fun testParseGroupPathNamespaceUserLeaf() {
+        val result = mapper.parseGroupPath("registry-company1/user")
+        assertNotNull(result)
+        assertEquals("company1", result.namespace)
+        assertNull(result.repoPath)
+        assertEquals(false, result.isEditor)
+        assertEquals(true, result.hasExplicitRole)
+    }
+
+    @Test
+    fun testParseGroupPathNamespaceEditorLeaf() {
+        val result = mapper.parseGroupPath("registry-company1/editor")
+        assertNotNull(result)
+        assertEquals("company1", result.namespace)
+        assertNull(result.repoPath)
+        assertEquals(true, result.isEditor)
+        assertEquals(true, result.hasExplicitRole)
+    }
+
+    @Test
+    fun testParseGroupPathRepoLevelUser() {
+        val result = mapper.parseGroupPath("registry-company1/myrepo/user")
+        assertNotNull(result)
+        assertEquals("company1", result.namespace)
+        assertEquals("myrepo", result.repoPath)
+        assertEquals(false, result.isEditor)
+        assertEquals(true, result.hasExplicitRole)
+    }
+
+    @Test
+    fun testParseGroupPathRepoLevelEditor() {
+        val result = mapper.parseGroupPath("registry-company1/myrepo/editor")
+        assertNotNull(result)
+        assertEquals("company1", result.namespace)
+        assertEquals("myrepo", result.repoPath)
+        assertEquals(true, result.isEditor)
+        assertEquals(true, result.hasExplicitRole)
+    }
+
+    @Test
+    fun testParseGroupPathDeepRepoPath() {
+        val result = mapper.parseGroupPath("registry-company1/team/myrepo/editor")
+        assertNotNull(result)
+        assertEquals("company1", result.namespace)
+        assertEquals("team/myrepo", result.repoPath)
+        assertEquals(true, result.isEditor)
+        assertEquals(true, result.hasExplicitRole)
+    }
+
+    @Test
+    fun testParseGroupPathWithLeadingSlash() {
+        val result = mapper.parseGroupPath("/registry-company1/myrepo/editor")
+        assertNotNull(result)
+        assertEquals("company1", result.namespace)
+        assertEquals("myrepo", result.repoPath)
+        assertEquals(true, result.isEditor)
+    }
+
+    @Test
+    fun testParseGroupPathIgnoresNonPrefixedGroup() {
+        assertNull(mapper.parseGroupPath("othergroup/editor"))
+    }
+
+    @Test
+    fun testParseGroupPathIgnoresInvalidRoleLeaf() {
+        assertNull(mapper.parseGroupPath("registry-company1/admin"))
+    }
+
+    @Test
+    fun testParseGroupPathIgnoresEmptyNamespace() {
+        assertNull(mapper.parseGroupPath("registry-"))
+    }
+
+    @Test
+    fun testParseGroupPathCustomPrefix() {
+        mapper.groupPrefix = "myprefix-"
+        val result = mapper.parseGroupPath("myprefix-company1/editor")
+        assertNotNull(result)
+        assertEquals("company1", result.namespace)
+        mapper.groupPrefix = KeycloakGroupsAndRolesToDockerScopeMapper.DEFAULT_REGISTRY_GROUP_PREFIX
+    }
+
+    // -------------------------------------------------------------------------
+    // getUserGroupAccesses
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun testGetUserGroupAccessesEmpty() {
+        val user = mockUser()
+        assertEquals(0, mapper.getUserGroupAccesses(user).size)
+    }
+
+    @Test
+    fun testGetUserGroupAccessesPlainNamespaceGroup() {
+        val group = mockGroup("registry-company1")
+        val user = mockUser(group)
+        val accesses = mapper.getUserGroupAccesses(user)
+        assertEquals(1, accesses.size)
+        assertEquals("company1", accesses.first().namespace)
+        assertNull(accesses.first().repoPath)
+        assertEquals(false, accesses.first().hasExplicitRole)
+    }
+
+    @Test
+    fun testGetUserGroupAccessesWithRoleLeaf() {
+        val parent = mockGroup("registry-company1")
+        val child = mockGroup("editor", parent)
+        val user = mockUser(parent, child)
+        val accesses = mapper.getUserGroupAccesses(user)
+        assertEquals(2, accesses.size)
+        val namespaceAccess = accesses.find { !it.hasExplicitRole }
+        assertNotNull(namespaceAccess)
+        assertEquals("company1", namespaceAccess.namespace)
+        val roleAccess = accesses.find { it.hasExplicitRole && it.repoPath == null }
+        assertNotNull(roleAccess)
+        assertEquals(true, roleAccess.isEditor)
+    }
+
+    @Test
+    fun testGetUserGroupAccessesWithRepoOverride() {
+        val parent = mockGroup("registry-company1")
+        val repoGroup = mockGroup("myrepo", parent)
+        val roleGroup = mockGroup("editor", repoGroup)
+        val user = mockUser(parent, roleGroup)
+        val accesses = mapper.getUserGroupAccesses(user)
+        assertEquals(2, accesses.size)
+        val repoAccess = accesses.find { it.repoPath == "myrepo" }
+        assertNotNull(repoAccess)
+        assertEquals("company1", repoAccess.namespace)
+        assertEquals(true, repoAccess.isEditor)
+        assertEquals(true, repoAccess.hasExplicitRole)
+    }
+
+    @Test
+    fun testGetUserGroupAccessesIgnoresNonPrefixedGroups() {
+        val otherGroup = mockGroup("someothergroup")
+        val user = mockUser(otherGroup)
+        assertEquals(0, mapper.getUserGroupAccesses(user).size)
+    }
+
+    @Test
+    fun testGetUserGroupAccessesWithCustomPrefix() {
+        val customPrefix = "_my-group-prefix_"
         mapper.groupPrefix = customPrefix
-        assertEquals(mapper.groupPrefix, customPrefix)
-
-        val user = Mockito.mock(UserModel::class.java)
-        val groupNames = setOf("${customPrefix}company", "otherGroup")
-
-        given(user.groupsStream).willAnswer {
-            groupNames.map { groupName ->
-                Mockito.mock(GroupModel::class.java).also { parentGroup ->
-                    given(parentGroup.name).willReturn(groupName)
-                }
-            }.stream()
-        }
-        val expectedGroupNames = setOf("company")
-        val actualGroupNames = mapper.getUserNamespacesFromGroups(user)
-        assertEquals(expectedGroupNames.sorted(), actualGroupNames.sorted())
+        val group = mockGroup("${customPrefix}company")
+        val user = mockUser(group)
+        val accesses = mapper.getUserGroupAccesses(user)
+        assertEquals(1, accesses.size)
+        assertEquals("company", accesses.first().namespace)
+        mapper.groupPrefix = KeycloakGroupsAndRolesToDockerScopeMapper.DEFAULT_REGISTRY_GROUP_PREFIX
     }
+
+    @Test
+    fun testGetUserGroupAccessesNamespaceOnlyReturnsNoRepoPath() {
+        val group = mockGroup("${mapper.groupPrefix}company")
+        val user = mockUser(group)
+        val accesses = mapper.getUserGroupAccesses(user)
+        assertEquals(1, accesses.size)
+        assertNull(accesses.first().repoPath)
+    }
+
+    @Test
+    fun testGetUserGroupAccessesRepoGroupDoesNotContributeNamespace() {
+        // user is only member of the leaf role group, not of the namespace group itself
+        val namespaceGroup = mockGroup("${mapper.groupPrefix}company")
+        val repoGroup = mockGroup("myrepo", namespaceGroup)
+        val roleGroup = mockGroup("editor", repoGroup)
+        val user = mockUser(roleGroup)
+        val accesses = mapper.getUserGroupAccesses(user)
+        assertEquals(1, accesses.size)
+        assertEquals("myrepo", accesses.first().repoPath)
+        assertNull(accesses.find { it.repoPath == null })
+    }
+
+    // -------------------------------------------------------------------------
+    // getRepoPathFromRepositoryName
+    // -------------------------------------------------------------------------
+
+    @Test
+    fun testGetRepoPathSimple() {
+        assertEquals("myrepo", mapper.getRepoPathFromRepositoryName("namespace/myrepo"))
+    }
+
+    @Test
+    fun testGetRepoPathNested() {
+        assertEquals("team/myrepo", mapper.getRepoPathFromRepositoryName("namespace/team/myrepo"))
+    }
+
+    @Test
+    fun testGetRepoPathNoNamespace() {
+        assertNull(mapper.getRepoPathFromRepositoryName("image"))
+    }
+
+    // -------------------------------------------------------------------------
+    // filterAllowedActions
+    // -------------------------------------------------------------------------
 
     @Test
     fun testFilterAllowedActionsAllForUser() {
-        val requestedActions = setOf(ACTION_ALL)
-        val clientRoleNames = emptySet<String>()
-        val allowedActions = mapper.filterAllowedActions(requestedActions, clientRoleNames)
-        val expectedActions = setOf(ACTION_PULL)
-        assertEquals(expectedActions.sorted(), allowedActions.sorted())
+        assertEquals(listOf(ACTION_PULL), mapper.filterAllowedActions(setOf(ACTION_ALL), isEditor = false).sorted())
     }
 
     @Test
     fun testFilterAllowedActionsPullForUser() {
-        val requestedActions = setOf(ACTION_PULL)
-        val clientRoleNames = emptySet<String>()
-        val allowedActions = mapper.filterAllowedActions(requestedActions, clientRoleNames)
-        val expectedActions = setOf(ACTION_PULL)
-        assertEquals(expectedActions.sorted(), allowedActions.sorted())
+        assertEquals(listOf(ACTION_PULL), mapper.filterAllowedActions(setOf(ACTION_PULL), isEditor = false).sorted())
     }
 
     @Test
     fun testFilterAllowedActionsPushForUser() {
-        val requestedActions = setOf(ACTION_PUSH)
-        val clientRoleNames = emptySet<String>()
-        val allowedActions = mapper.filterAllowedActions(requestedActions, clientRoleNames)
-        val expectedActions = emptySet<String>()
-        assertEquals(expectedActions.sorted(), allowedActions.sorted())
+        assertEquals(emptyList<String>(), mapper.filterAllowedActions(setOf(ACTION_PUSH), isEditor = false).sorted())
     }
 
     @Test
     fun testFilterAllowedActionsDeleteForUser() {
-        val requestedActions = setOf(ACTION_DELETE)
-        val clientRoleNames = emptySet<String>()
-        val allowedActions = mapper.filterAllowedActions(requestedActions, clientRoleNames)
-        val expectedActions = emptySet<String>()
-        assertEquals(expectedActions.sorted(), allowedActions.sorted())
+        assertEquals(emptyList<String>(), mapper.filterAllowedActions(setOf(ACTION_DELETE), isEditor = false).sorted())
     }
 
     @Test
     fun testFilterAllowedActionsPullPushForUser() {
-        val requestedActions = setOf(ACTION_PULL, ACTION_PUSH)
-        val clientRoleNames = emptySet<String>()
-        val allowedActions = mapper.filterAllowedActions(requestedActions, clientRoleNames)
-        val expectedActions = setOf(ACTION_PULL)
-        assertEquals(expectedActions.sorted(), allowedActions.sorted())
+        assertEquals(listOf(ACTION_PULL), mapper.filterAllowedActions(setOf(ACTION_PULL, ACTION_PUSH), isEditor = false).sorted())
     }
 
     @Test
     fun testFilterAllowedActionsPullPushDeleteForUser() {
-        val requestedActions = setOf(ACTION_PULL, ACTION_PUSH, ACTION_DELETE)
-        val clientRoleNames = emptySet<String>()
-        val allowedActions = mapper.filterAllowedActions(requestedActions, clientRoleNames)
-        val expectedActions = setOf(ACTION_PULL)
-        assertEquals(expectedActions.sorted(), allowedActions.sorted())
+        assertEquals(listOf(ACTION_PULL), mapper.filterAllowedActions(setOf(ACTION_PULL, ACTION_PUSH, ACTION_DELETE), isEditor = false).sorted())
     }
 
     @Test
     fun testFilterAllowedActionsAllForEditor() {
-        val requestedActions = setOf(ACTION_ALL)
-        val clientRoleNames = setOf(KeycloakGroupsAndRolesToDockerScopeMapper.ROLE_EDITOR)
-        val allowedActions = mapper.filterAllowedActions(requestedActions, clientRoleNames)
-        val expectedActions = setOf(ACTION_ALL)
-        assertEquals(expectedActions.sorted(), allowedActions.sorted())
+        assertEquals(listOf(ACTION_ALL), mapper.filterAllowedActions(setOf(ACTION_ALL), isEditor = true).sorted())
     }
 
     @Test
     fun testFilterAllowedActionsPullForEditor() {
-        val requestedActions = setOf(ACTION_PULL)
-        val clientRoleNames = setOf(KeycloakGroupsAndRolesToDockerScopeMapper.ROLE_EDITOR)
-        val allowedActions = mapper.filterAllowedActions(requestedActions, clientRoleNames)
-        val expectedActions = setOf(ACTION_PULL)
-        assertEquals(expectedActions.sorted(), allowedActions.sorted())
+        assertEquals(listOf(ACTION_PULL), mapper.filterAllowedActions(setOf(ACTION_PULL), isEditor = true).sorted())
     }
 
     @Test
     fun testFilterAllowedActionsPushForEditor() {
-        val requestedActions = setOf(ACTION_PUSH)
-        val clientRoleNames = setOf(KeycloakGroupsAndRolesToDockerScopeMapper.ROLE_EDITOR)
-        val allowedActions = mapper.filterAllowedActions(requestedActions, clientRoleNames)
-        val expectedActions = setOf(ACTION_PUSH)
-        assertEquals(expectedActions.sorted(), allowedActions.sorted())
+        assertEquals(listOf(ACTION_PUSH), mapper.filterAllowedActions(setOf(ACTION_PUSH), isEditor = true).sorted())
     }
 
     @Test
     fun testFilterAllowedActionsDeleteForEditor() {
-        val requestedActions = setOf(ACTION_DELETE)
-        val clientRoleNames = setOf(KeycloakGroupsAndRolesToDockerScopeMapper.ROLE_EDITOR)
-        val allowedActions = mapper.filterAllowedActions(requestedActions, clientRoleNames)
-        val expectedActions = setOf(ACTION_DELETE)
-        assertEquals(expectedActions.sorted(), allowedActions.sorted())
+        assertEquals(listOf(ACTION_DELETE), mapper.filterAllowedActions(setOf(ACTION_DELETE), isEditor = true).sorted())
     }
 
     @Test
     fun testFilterAllowedActionsPullPushForEditor() {
-        val requestedActions = setOf(ACTION_PULL, ACTION_PUSH)
-        val clientRoleNames = setOf(KeycloakGroupsAndRolesToDockerScopeMapper.ROLE_EDITOR)
-        val allowedActions = mapper.filterAllowedActions(requestedActions, clientRoleNames)
-        val expectedActions = setOf(ACTION_PULL, ACTION_PUSH)
-        assertEquals(expectedActions.sorted(), allowedActions.sorted())
+        assertEquals(listOf(ACTION_PULL, ACTION_PUSH).sorted(), mapper.filterAllowedActions(setOf(ACTION_PULL, ACTION_PUSH), isEditor = true).sorted())
     }
 
     @Test
     fun testFilterAllowedActionsPullPushDeleteForEditor() {
-        val requestedActions = setOf(ACTION_PULL, ACTION_PUSH, ACTION_DELETE)
-        val clientRoleNames = setOf(KeycloakGroupsAndRolesToDockerScopeMapper.ROLE_EDITOR)
-        val allowedActions = mapper.filterAllowedActions(requestedActions, clientRoleNames)
-        val expectedActions = setOf(ACTION_PULL, ACTION_PUSH, ACTION_DELETE)
-        assertEquals(expectedActions.sorted(), allowedActions.sorted())
+        assertEquals(listOf(ACTION_PULL, ACTION_PUSH, ACTION_DELETE).sorted(), mapper.filterAllowedActions(setOf(ACTION_PULL, ACTION_PUSH, ACTION_DELETE), isEditor = true).sorted())
     }
-
 }

@@ -1,10 +1,10 @@
 # Docker v2 - Groups and Role Mapper for Keycloak 26.x
 
 ![GitHub release (latest by date)](https://img.shields.io/github/v/release/alexanderwolz/keycloak-registry-mapper)
-![GitHub](https://img.shields.io/badge/keycloak-26.4.0-orange)
-![GitHub](https://img.shields.io/badge/registry-2.8.2-orange)
+![GitHub](https://img.shields.io/badge/keycloak-26.5.4-orange)
+![GitHub](https://img.shields.io/badge/registry-2.8.3-orange)
 ![GitHub](https://img.shields.io/github/license/alexanderwolz/keycloak-registry-mapper)
-![GitHub](https://img.shields.io/badge/test_cases-632-informational)
+![GitHub](https://img.shields.io/badge/test_cases-690-informational)
 ![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/alexanderwolz/keycloak-registry-mapper)
 ![GitHub all releases](https://img.shields.io/github/downloads/alexanderwolz/keycloak-registry-mapper/total?color=informational)
 

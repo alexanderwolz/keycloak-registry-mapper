@@ -21,10 +21,10 @@ abstract class AbstractScopeMapperTestSuite {
         private const val CLIENT_ID = "registry"
         private const val USER_NAME = "Johnny"
         private const val USER_EMAIL = "john.doe@johnny.com"
-        private const val IMAGE = "image"
 
-        private const val NAMESPACE = "johnny"
-        private const val NAMESPACE_DOMAIN = "johnny.com"
+        const val IMAGE = "image"
+        const val NAMESPACE = "johnny"
+        const val NAMESPACE_DOMAIN = "johnny.com"
 
         // scopes can either be registry, repository or repository(plugin)
         const val SCOPE_REGISTRY_CATALOG_ALL = "registry:catalog:*"
@@ -66,6 +66,12 @@ abstract class AbstractScopeMapperTestSuite {
         const val SCOPE_REPO_PLUGIN_NAMESPACE_DOMAIN_DELETE = "repository(plugin):$NAMESPACE_DOMAIN/$IMAGE:delete"
         const val SCOPE_REPO_PLUGIN_NAMESPACE_DOMAIN_PULL_PUSH = "repository(plugin):$NAMESPACE_DOMAIN/$IMAGE:pull,push"
 
+        const val SCOPE_DEEP_REPO_ALL = "repository:$NAMESPACE/team/$IMAGE:*"
+        const val SCOPE_DEEP_REPO_PULL = "repository:$NAMESPACE/team/$IMAGE:pull"
+        const val SCOPE_DEEP_REPO_PUSH = "repository:$NAMESPACE/team/$IMAGE:push"
+        const val SCOPE_DEEP_REPO_DELETE = "repository:$NAMESPACE/team/$IMAGE:delete"
+        const val SCOPE_DEEP_REPO_PULL_PUSH = "repository:$NAMESPACE/team/$IMAGE:pull,push"
+
         private const val GROUP_PREFIX = KeycloakGroupsAndRolesToDockerScopeMapper.DEFAULT_REGISTRY_GROUP_PREFIX
         const val GROUP_NAMESPACE = "${GROUP_PREFIX}$NAMESPACE"
         const val GROUP_NAMESPACE_OTHER = "${GROUP_PREFIX}otherNamespace"
@@ -73,7 +79,6 @@ abstract class AbstractScopeMapperTestSuite {
 
     private val logger = Logger.getLogger(javaClass)
 
-    //transformDockerResponseToken - uses responseToken, userSession and clientSession
     private lateinit var mapper: KeycloakGroupsAndRolesToDockerScopeMapper
 
     private lateinit var responseToken: DockerResponseToken
@@ -100,7 +105,6 @@ abstract class AbstractScopeMapperTestSuite {
 
         mapper = KeycloakGroupsAndRolesToDockerScopeMapper()
 
-        //unused objects but necessary because of signature
         responseToken = DockerResponseToken()
         mappingModel = ProtocolMapperModel()
         session = Mockito.mock(KeycloakSession::class.java)
@@ -129,6 +133,27 @@ abstract class AbstractScopeMapperTestSuite {
         val groups = createGroupsByNames(*groupNames)
         given(userModel.groupsStream).willAnswer { groups.stream() }
         assertEquals(groups, userModel.groupsStream.toList())
+    }
+
+    protected fun setNestedGroups(vararg groupPaths: String) {
+        val leafGroups = groupPaths.map { path -> buildNestedGroupChain(path) }
+        given(userModel.groupsStream).willAnswer { leafGroups.stream() }
+    }
+
+    private fun buildNestedGroupChain(path: String): GroupModel {
+        val segments = path.trim('/').split("/")
+        var parent: GroupModel? = null
+        var leaf: GroupModel = Mockito.mock(GroupModel::class.java)
+        segments.forEachIndexed { index, name ->
+            val group = Mockito.mock(GroupModel::class.java)
+            BDDMockito.given(group.name).willReturn(name)
+            BDDMockito.given(group.parent).willReturn(parent)
+            parent = group
+            if (index == segments.lastIndex) {
+                leaf = group
+            }
+        }
+        return leaf
     }
 
     protected open fun setRoles(vararg roleNames: String) {
@@ -162,11 +187,6 @@ abstract class AbstractScopeMapperTestSuite {
         assertEquals(expectedActions.sorted(), actualToken.accessItems.first().actions.sorted())
     }
 
-
-    /**
-     *  convenience methods
-     */
-
     private fun transformDockerResponseToken(): DockerResponseToken {
         return mapper.transformDockerResponseToken(
             responseToken, mappingModel, session, userSession, clientSession
@@ -193,5 +213,4 @@ abstract class AbstractScopeMapperTestSuite {
             role
         }
     }
-
 }
